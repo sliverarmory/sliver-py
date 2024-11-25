@@ -1,17 +1,17 @@
 """
-    Sliver Implant Framework
-    Copyright (C) 2022  Bishop Fox
+Sliver Implant Framework
+Copyright (C) 2022  Bishop Fox
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 from typing import List, Optional
@@ -825,3 +825,83 @@ class BaseInteractiveCommands:
             LinesBelow=lines_below,
         )
         return await self._stub.Grep(self._request(grep), timeout=self.timeout)
+
+    async def start_service(
+        self: InteractiveObject,
+        service_name: str,
+        service_description: str,
+        bin_path: str,
+        hostname: str,
+        arguments: str,
+    ) -> sliver_pb2.ServiceInfo:
+        """Start a service on the remote system
+
+        :param service_name: Name of the service
+        :type service_name: str
+        :param service_description: Description of the service
+        :type service_description: str
+        :param bin_path: Path to the service binary
+        :type bin_path: str
+        :param hostname: Hostname
+        :type hostname: str
+        :param arguments: Arguments to the service
+        :type arguments: str
+        :return: Protobuf ServiceInfo object
+        :rtype: sliver_pb2.ServiceInfo
+        """
+        service = sliver_pb2.StartServiceReq(
+            ServiceName=service_name,
+            ServiceDescription=service_description,
+            BinPath=bin_path,
+            Hostname=hostname,
+            Arguments=arguments,
+        )
+        return await self._stub.StartService(
+            self._request(service), timeout=self.timeout
+        )
+
+    async def stop_service(
+        self: InteractiveObject,
+        service_name: str,
+        hostname: str,
+    ) -> sliver_pb2.ServiceInfo:
+        """Stop a service on the remote system
+
+        :param service_name: Name of the service
+        :type service_name: str
+        :param hostname: Hostname
+        :type hostname: str
+        :return: Protobuf ServiceInfo object
+        :rtype: sliver_pb2.ServiceInfo
+        """
+        service_info = sliver_pb2.ServiceInfoReq(
+            ServiceName=service_name,
+            Hostname=hostname,
+        )
+        service = sliver_pb2.StopServiceReq(ServiceInfo=service_info)
+        return await self._stub.StopService(
+            self._request(service), timeout=self.timeout
+        )
+
+    async def remove_service(
+        self: InteractiveObject,
+        service_name: str,
+        hostname: str,
+    ) -> sliver_pb2.ServiceInfo:
+        """Remove a service on the remote system
+
+        :param service_name: Name of the service
+        :type service_name: str
+        :param hostname: Hostname
+        :type hostname: str
+        :return: Protobuf ServiceInfo object
+        :rtype: sliver_pb2.ServiceInfo
+        """
+        service_info = sliver_pb2.ServiceInfoReq(
+            ServiceName=service_name,
+            Hostname=hostname,
+        )
+        service = sliver_pb2.RemoveServiceReq(ServiceInfo=service_info)
+        return await self._stub.RemoveService(
+            self._request(service), timeout=self.timeout
+        )

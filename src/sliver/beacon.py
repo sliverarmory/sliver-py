@@ -1,17 +1,17 @@
 """
-    Sliver Implant Framework
-    Copyright (C) 2022  Bishop Fox
+Sliver Implant Framework
+Copyright (C) 2022  Bishop Fox
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
 import asyncio
@@ -163,7 +163,9 @@ class BaseBeacon:
                 beacon_task.ParseFromString(event.Data)
                 if beacon_task.ID not in self.beacon_tasks:
                     continue
-                task_content = await self._stub.GetBeaconTaskContent(client_pb2.BeaconTask(ID=beacon_task.ID))
+                task_content = await self._stub.GetBeaconTaskContent(
+                    client_pb2.BeaconTask(ID=beacon_task.ID)
+                )
                 task_future, pb_object = self.beacon_tasks[beacon_task.ID]
                 del self.beacon_tasks[beacon_task.ID]
                 if pb_object is not None:
@@ -330,7 +332,9 @@ class InteractiveBeacon(BaseBeacon, BaseInteractiveCommands):
         return await super().registry_write(*args, **kwargs)
 
     @beacon_taskresult(sliver_pb2.RegistryCreateKey)
-    async def registry_create_key(self, *args, **kwargs) -> sliver_pb2.RegistryCreateKey:
+    async def registry_create_key(
+        self, *args, **kwargs
+    ) -> sliver_pb2.RegistryCreateKey:
         return await super().registry_create_key(*args, **kwargs)
 
     @beacon_taskresult(sliver_pb2.RegistryReadHive)
@@ -340,3 +344,15 @@ class InteractiveBeacon(BaseBeacon, BaseInteractiveCommands):
     @beacon_taskresult(sliver_pb2.Grep)
     async def grep(self, *args, **kwargs) -> sliver_pb2.Grep:
         return await super().grep(*args, **kwargs)
+
+    @beacon_taskresult(sliver_pb2.ServiceInfo)
+    async def start_service(self, *args, **kwargs) -> sliver_pb2.ServiceInfo:
+        return await super().start_service(*args, **kwargs)
+
+    @beacon_taskresult(sliver_pb2.ServiceInfo)
+    async def stop_service(self, *args, **kwargs) -> sliver_pb2.ServiceInfo:
+        return await super().stop_service(*args, **kwargs)
+
+    @beacon_taskresult(sliver_pb2.ServiceInfo)
+    async def remove_service(self, *args, **kwargs) -> sliver_pb2.ServiceInfo:
+        return await super().remove_service(*args, **kwargs)

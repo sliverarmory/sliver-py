@@ -228,7 +228,7 @@ class InteractiveSession(BaseSession, BaseInteractiveCommands):
 
     async def backdoor(
         self, remote_path: str, profile_name: str
-    ) -> sliver_pb2.Backdoor:
+    ) -> client_pb2.Backdoor:
         """Backdoor a remote binary by injecting a Sliver payload into the executable using a code cave
 
         :param remote_path: Remote path to an executable to backdoor
@@ -238,7 +238,7 @@ class InteractiveSession(BaseSession, BaseInteractiveCommands):
         :return: Protobuf Backdoor object
         :rtype: sliver_pb2.Backdoor
         """
-        backdoor = sliver_pb2.BackdoorReq()
+        backdoor = client_pb2.BackdoorReq()
         backdoor.FilePath = remote_path
         backdoor.ProfileName = profile_name
         return await self._stub.Backdoor(self._request(backdoor), timeout=self.timeout)

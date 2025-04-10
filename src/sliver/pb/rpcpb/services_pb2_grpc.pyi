@@ -16,6 +16,11 @@ class SliverRPCStub:
         client_pb2.Version,
     ]
     """*** Version ***"""
+    ClientLog: grpc.StreamUnaryMultiCallable[
+        client_pb2.ClientLogData,
+        common_pb2.Empty,
+    ]
+    """*** Client Logs ***"""
     GetOperators: grpc.UnaryUnaryMultiCallable[
         common_pb2.Empty,
         client_pb2.Operators,
@@ -39,6 +44,48 @@ class SliverRPCStub:
         client_pb2.Sessions,
     ]
     """*** Sessions ***"""
+    MonitorStart: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        common_pb2.Response,
+    ]
+    """***Threat monitoring ***"""
+    MonitorStop: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        common_pb2.Empty,
+    ]
+    MonitorListConfig: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        client_pb2.MonitoringProviders,
+    ]
+    MonitorAddConfig: grpc.UnaryUnaryMultiCallable[
+        client_pb2.MonitoringProvider,
+        common_pb2.Response,
+    ]
+    MonitorDelConfig: grpc.UnaryUnaryMultiCallable[
+        client_pb2.MonitoringProvider,
+        common_pb2.Response,
+    ]
+    StartMTLSListener: grpc.UnaryUnaryMultiCallable[
+        client_pb2.MTLSListenerReq,
+        client_pb2.ListenerJob,
+    ]
+    """*** Listeners ***"""
+    StartWGListener: grpc.UnaryUnaryMultiCallable[
+        client_pb2.WGListenerReq,
+        client_pb2.ListenerJob,
+    ]
+    StartDNSListener: grpc.UnaryUnaryMultiCallable[
+        client_pb2.DNSListenerReq,
+        client_pb2.ListenerJob,
+    ]
+    StartHTTPSListener: grpc.UnaryUnaryMultiCallable[
+        client_pb2.HTTPListenerReq,
+        client_pb2.ListenerJob,
+    ]
+    StartHTTPListener: grpc.UnaryUnaryMultiCallable[
+        client_pb2.HTTPListenerReq,
+        client_pb2.ListenerJob,
+    ]
     GetBeacons: grpc.UnaryUnaryMultiCallable[
         common_pb2.Empty,
         client_pb2.Beacons,
@@ -64,13 +111,8 @@ class SliverRPCStub:
         client_pb2.BeaconTask,
         client_pb2.BeaconTask,
     ]
-    MonitorStart: grpc.UnaryUnaryMultiCallable[
-        common_pb2.Empty,
-        common_pb2.Response,
-    ]
-    """***Threat monitoring ***"""
-    MonitorStop: grpc.UnaryUnaryMultiCallable[
-        common_pb2.Empty,
+    UpdateBeaconIntegrityInformation: grpc.UnaryUnaryMultiCallable[
+        client_pb2.BeaconIntegrity,
         common_pb2.Empty,
     ]
     GetJobs: grpc.UnaryUnaryMultiCallable[
@@ -82,36 +124,15 @@ class SliverRPCStub:
         client_pb2.KillJobReq,
         client_pb2.KillJob,
     ]
-    StartMTLSListener: grpc.UnaryUnaryMultiCallable[
-        client_pb2.MTLSListenerReq,
-        client_pb2.MTLSListener,
-    ]
-    """*** Listeners ***"""
-    StartWGListener: grpc.UnaryUnaryMultiCallable[
-        client_pb2.WGListenerReq,
-        client_pb2.WGListener,
-    ]
-    StartDNSListener: grpc.UnaryUnaryMultiCallable[
-        client_pb2.DNSListenerReq,
-        client_pb2.DNSListener,
-    ]
-    StartHTTPSListener: grpc.UnaryUnaryMultiCallable[
-        client_pb2.HTTPListenerReq,
-        client_pb2.HTTPListener,
-    ]
-    StartHTTPListener: grpc.UnaryUnaryMultiCallable[
-        client_pb2.HTTPListenerReq,
-        client_pb2.HTTPListener,
+    RestartJobs: grpc.UnaryUnaryMultiCallable[
+        client_pb2.RestartJobReq,
+        common_pb2.Empty,
     ]
     StartTCPStagerListener: grpc.UnaryUnaryMultiCallable[
         client_pb2.StagerListenerReq,
         client_pb2.StagerListener,
     ]
     """*** Stager Listener ***"""
-    StartHTTPStagerListener: grpc.UnaryUnaryMultiCallable[
-        client_pb2.StagerListenerReq,
-        client_pb2.StagerListener,
-    ]
     LootAdd: grpc.UnaryUnaryMultiCallable[
         client_pb2.Loot,
         client_pb2.Loot,
@@ -133,9 +154,38 @@ class SliverRPCStub:
         common_pb2.Empty,
         client_pb2.AllLoot,
     ]
-    LootAllOf: grpc.UnaryUnaryMultiCallable[
-        client_pb2.Loot,
-        client_pb2.AllLoot,
+    Creds: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        client_pb2.Credentials,
+    ]
+    """*** Creds ***"""
+    CredsAdd: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credentials,
+        common_pb2.Empty,
+    ]
+    CredsRm: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credentials,
+        common_pb2.Empty,
+    ]
+    CredsUpdate: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credentials,
+        common_pb2.Empty,
+    ]
+    GetCredByID: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credential,
+        client_pb2.Credential,
+    ]
+    GetCredsByHashType: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credential,
+        client_pb2.Credentials,
+    ]
+    GetPlaintextCredsByHashType: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credential,
+        client_pb2.Credentials,
+    ]
+    CredsSniffHashType: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Credential,
+        client_pb2.Credential,
     ]
     Hosts: grpc.UnaryUnaryMultiCallable[
         common_pb2.Empty,
@@ -160,21 +210,110 @@ class SliverRPCStub:
     ]
     """*** Implants ***"""
     GenerateExternal: grpc.UnaryUnaryMultiCallable[
-        client_pb2.GenerateReq,
+        client_pb2.ExternalGenerateReq,
         client_pb2.ExternalImplantConfig,
     ]
     GenerateExternalSaveBuild: grpc.UnaryUnaryMultiCallable[
         client_pb2.ExternalImplantBinary,
         common_pb2.Empty,
     ]
-    GenerateExternalGetImplantConfig: grpc.UnaryUnaryMultiCallable[
-        client_pb2.ImplantConfig,
+    GenerateExternalGetBuildConfig: grpc.UnaryUnaryMultiCallable[
+        client_pb2.ImplantBuild,
         client_pb2.ExternalImplantConfig,
+    ]
+    GenerateStage: grpc.UnaryUnaryMultiCallable[
+        client_pb2.GenerateStageReq,
+        client_pb2.Generate,
+    ]
+    StageImplantBuild: grpc.UnaryUnaryMultiCallable[
+        client_pb2.ImplantStageReq,
+        common_pb2.Empty,
+    ]
+    GetHTTPC2Profiles: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        client_pb2.HTTPC2Configs,
+    ]
+    """*** HTTP C2 Profiles ***"""
+    GetHTTPC2ProfileByName: grpc.UnaryUnaryMultiCallable[
+        client_pb2.C2ProfileReq,
+        client_pb2.HTTPC2Config,
+    ]
+    SaveHTTPC2Profile: grpc.UnaryUnaryMultiCallable[
+        client_pb2.HTTPC2ConfigReq,
+        common_pb2.Empty,
+    ]
+    BuilderRegister: grpc.UnaryStreamMultiCallable[
+        client_pb2.Builder,
+        client_pb2.Event,
+    ]
+    """*** Builders ***"""
+    BuilderTrigger: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Event,
+        common_pb2.Empty,
+    ]
+    Builders: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        client_pb2.Builders,
+    ]
+    GetCertificateInfo: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CertificatesReq,
+        client_pb2.CertificateInfo,
+    ]
+    """*** Certificates ***"""
+    CrackstationRegister: grpc.UnaryStreamMultiCallable[
+        client_pb2.Crackstation,
+        client_pb2.Event,
+    ]
+    """*** Crackstation ***"""
+    CrackstationTrigger: grpc.UnaryUnaryMultiCallable[
+        client_pb2.Event,
+        common_pb2.Empty,
+    ]
+    CrackstationBenchmark: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackBenchmark,
+        common_pb2.Empty,
+    ]
+    Crackstations: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        client_pb2.Crackstations,
+    ]
+    CrackTaskByID: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackTask,
+        client_pb2.CrackTask,
+    ]
+    CrackTaskUpdate: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackTask,
+        common_pb2.Empty,
+    ]
+    CrackFilesList: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackFile,
+        client_pb2.CrackFiles,
+    ]
+    CrackFileCreate: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackFile,
+        client_pb2.CrackFile,
+    ]
+    CrackFileChunkUpload: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackFileChunk,
+        common_pb2.Empty,
+    ]
+    CrackFileChunkDownload: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackFileChunk,
+        client_pb2.CrackFileChunk,
+    ]
+    CrackFileComplete: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackFile,
+        common_pb2.Empty,
+    ]
+    CrackFileDelete: grpc.UnaryUnaryMultiCallable[
+        client_pb2.CrackFile,
+        common_pb2.Empty,
     ]
     Regenerate: grpc.UnaryUnaryMultiCallable[
         client_pb2.RegenerateReq,
         client_pb2.Generate,
     ]
+    """*** Payloads ***"""
     ImplantBuilds: grpc.UnaryUnaryMultiCallable[
         common_pb2.Empty,
         client_pb2.ImplantBuilds,
@@ -207,10 +346,6 @@ class SliverRPCStub:
         client_pb2.ImplantProfile,
         client_pb2.ImplantProfile,
     ]
-    MsfStage: grpc.UnaryUnaryMultiCallable[
-        client_pb2.MsfStagerReq,
-        client_pb2.MsfStager,
-    ]
     ShellcodeRDI: grpc.UnaryUnaryMultiCallable[
         client_pb2.ShellcodeRDIReq,
         client_pb2.ShellcodeRDI,
@@ -226,6 +361,18 @@ class SliverRPCStub:
     ShellcodeEncoderMap: grpc.UnaryUnaryMultiCallable[
         common_pb2.Empty,
         client_pb2.ShellcodeEncoderMap,
+    ]
+    TrafficEncoderMap: grpc.UnaryUnaryMultiCallable[
+        common_pb2.Empty,
+        client_pb2.TrafficEncoderMap,
+    ]
+    TrafficEncoderAdd: grpc.UnaryUnaryMultiCallable[
+        client_pb2.TrafficEncoder,
+        client_pb2.TrafficEncoderTests,
+    ]
+    TrafficEncoderRm: grpc.UnaryUnaryMultiCallable[
+        client_pb2.TrafficEncoder,
+        common_pb2.Empty,
     ]
     Websites: grpc.UnaryUnaryMultiCallable[
         common_pb2.Empty,
@@ -289,6 +436,10 @@ class SliverRPCStub:
         sliver_pb2.MvReq,
         sliver_pb2.Mv,
     ]
+    Cp: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.CpReq,
+        sliver_pb2.Cp,
+    ]
     Rm: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.RmReq,
         sliver_pb2.Rm,
@@ -304,6 +455,38 @@ class SliverRPCStub:
     Upload: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.UploadReq,
         sliver_pb2.Upload,
+    ]
+    Grep: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.GrepReq,
+        sliver_pb2.Grep,
+    ]
+    Chmod: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ChmodReq,
+        sliver_pb2.Chmod,
+    ]
+    Chown: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ChownReq,
+        sliver_pb2.Chown,
+    ]
+    Chtimes: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ChtimesReq,
+        sliver_pb2.Chtimes,
+    ]
+    MemfilesList: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.MemfilesListReq,
+        sliver_pb2.Ls,
+    ]
+    MemfilesAdd: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.MemfilesAddReq,
+        sliver_pb2.MemfilesAdd,
+    ]
+    MemfilesRm: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.MemfilesRmReq,
+        sliver_pb2.MemfilesRm,
+    ]
+    Mount: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.MountReq,
+        sliver_pb2.Mount,
     ]
     ProcessDump: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.ProcessDumpReq,
@@ -369,6 +552,18 @@ class SliverRPCStub:
         sliver_pb2.CurrentTokenOwnerReq,
         sliver_pb2.CurrentTokenOwner,
     ]
+    Services: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ServicesReq,
+        sliver_pb2.Services,
+    ]
+    ServiceDetail: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ServiceDetailReq,
+        sliver_pb2.ServiceDetail,
+    ]
+    StartServiceByName: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.StartServiceByNameReq,
+        sliver_pb2.ServiceInfo,
+    ]
     PivotStartListener: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.PivotStartListenerReq,
         sliver_pb2.PivotListener,
@@ -415,8 +610,8 @@ class SliverRPCStub:
         sliver_pb2.UnsetEnv,
     ]
     Backdoor: grpc.UnaryUnaryMultiCallable[
-        sliver_pb2.BackdoorReq,
-        sliver_pb2.Backdoor,
+        client_pb2.BackdoorReq,
+        client_pb2.Backdoor,
     ]
     RegistryRead: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.RegistryReadReq,
@@ -441,6 +636,10 @@ class SliverRPCStub:
     RegistryListValues: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.RegistryListValuesReq,
         sliver_pb2.RegistryValuesList,
+    ]
+    RegistryReadHive: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.RegistryReadHiveReq,
+        sliver_pb2.RegistryReadHive,
     ]
     RunSSHCommand: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.SSHCommandReq,
@@ -470,7 +669,7 @@ class SliverRPCStub:
         sliver_pb2.OpenSession,
         sliver_pb2.OpenSession,
     ]
-    """Beacon only commands"""
+    """*** Beacon *** -only commands"""
     CloseSession: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.CloseSession,
         common_pb2.Empty,
@@ -479,7 +678,7 @@ class SliverRPCStub:
         sliver_pb2.RegisterExtensionReq,
         sliver_pb2.RegisterExtension,
     ]
-    """Extensions"""
+    """*** Extensions ***"""
     CallExtension: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.CallExtensionReq,
         sliver_pb2.CallExtension,
@@ -487,6 +686,19 @@ class SliverRPCStub:
     ListExtensions: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.ListExtensionsReq,
         sliver_pb2.ListExtensions,
+    ]
+    RegisterWasmExtension: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.RegisterWasmExtensionReq,
+        sliver_pb2.RegisterWasmExtension,
+    ]
+    """*** Wasm Extensions ***"""
+    ListWasmExtensions: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ListWasmExtensionsReq,
+        sliver_pb2.ListWasmExtensions,
+    ]
+    ExecWasmExtension: grpc.UnaryUnaryMultiCallable[
+        sliver_pb2.ExecWasmExtensionReq,
+        sliver_pb2.ExecWasmExtension,
     ]
     WGStartPortForward: grpc.UnaryUnaryMultiCallable[
         sliver_pb2.WGPortForwardStartReq,
@@ -563,6 +775,13 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
     ) -> client_pb2.Version:
         """*** Version ***"""
     @abc.abstractmethod
+    def ClientLog(
+        self,
+        request_iterator: collections.abc.Iterator[client_pb2.ClientLogData],
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty:
+        """*** Client Logs ***"""
+    @abc.abstractmethod
     def GetOperators(
         self,
         request: common_pb2.Empty,
@@ -595,6 +814,68 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> client_pb2.Sessions:
         """*** Sessions ***"""
+    @abc.abstractmethod
+    def MonitorStart(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Response:
+        """***Threat monitoring ***"""
+    @abc.abstractmethod
+    def MonitorStop(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def MonitorListConfig(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.MonitoringProviders: ...
+    @abc.abstractmethod
+    def MonitorAddConfig(
+        self,
+        request: client_pb2.MonitoringProvider,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Response: ...
+    @abc.abstractmethod
+    def MonitorDelConfig(
+        self,
+        request: client_pb2.MonitoringProvider,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Response: ...
+    @abc.abstractmethod
+    def StartMTLSListener(
+        self,
+        request: client_pb2.MTLSListenerReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.ListenerJob:
+        """*** Listeners ***"""
+    @abc.abstractmethod
+    def StartWGListener(
+        self,
+        request: client_pb2.WGListenerReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.ListenerJob: ...
+    @abc.abstractmethod
+    def StartDNSListener(
+        self,
+        request: client_pb2.DNSListenerReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.ListenerJob: ...
+    @abc.abstractmethod
+    def StartHTTPSListener(
+        self,
+        request: client_pb2.HTTPListenerReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.ListenerJob: ...
+    @abc.abstractmethod
+    def StartHTTPListener(
+        self,
+        request: client_pb2.HTTPListenerReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.ListenerJob: ...
     @abc.abstractmethod
     def GetBeacons(
         self,
@@ -633,16 +914,9 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> client_pb2.BeaconTask: ...
     @abc.abstractmethod
-    def MonitorStart(
+    def UpdateBeaconIntegrityInformation(
         self,
-        request: common_pb2.Empty,
-        context: grpc.ServicerContext,
-    ) -> common_pb2.Response:
-        """***Threat monitoring ***"""
-    @abc.abstractmethod
-    def MonitorStop(
-        self,
-        request: common_pb2.Empty,
+        request: client_pb2.BeaconIntegrity,
         context: grpc.ServicerContext,
     ) -> common_pb2.Empty: ...
     @abc.abstractmethod
@@ -659,36 +933,11 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> client_pb2.KillJob: ...
     @abc.abstractmethod
-    def StartMTLSListener(
+    def RestartJobs(
         self,
-        request: client_pb2.MTLSListenerReq,
+        request: client_pb2.RestartJobReq,
         context: grpc.ServicerContext,
-    ) -> client_pb2.MTLSListener:
-        """*** Listeners ***"""
-    @abc.abstractmethod
-    def StartWGListener(
-        self,
-        request: client_pb2.WGListenerReq,
-        context: grpc.ServicerContext,
-    ) -> client_pb2.WGListener: ...
-    @abc.abstractmethod
-    def StartDNSListener(
-        self,
-        request: client_pb2.DNSListenerReq,
-        context: grpc.ServicerContext,
-    ) -> client_pb2.DNSListener: ...
-    @abc.abstractmethod
-    def StartHTTPSListener(
-        self,
-        request: client_pb2.HTTPListenerReq,
-        context: grpc.ServicerContext,
-    ) -> client_pb2.HTTPListener: ...
-    @abc.abstractmethod
-    def StartHTTPListener(
-        self,
-        request: client_pb2.HTTPListenerReq,
-        context: grpc.ServicerContext,
-    ) -> client_pb2.HTTPListener: ...
+    ) -> common_pb2.Empty: ...
     @abc.abstractmethod
     def StartTCPStagerListener(
         self,
@@ -696,12 +945,6 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> client_pb2.StagerListener:
         """*** Stager Listener ***"""
-    @abc.abstractmethod
-    def StartHTTPStagerListener(
-        self,
-        request: client_pb2.StagerListenerReq,
-        context: grpc.ServicerContext,
-    ) -> client_pb2.StagerListener: ...
     @abc.abstractmethod
     def LootAdd(
         self,
@@ -734,11 +977,54 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> client_pb2.AllLoot: ...
     @abc.abstractmethod
-    def LootAllOf(
+    def Creds(
         self,
-        request: client_pb2.Loot,
+        request: common_pb2.Empty,
         context: grpc.ServicerContext,
-    ) -> client_pb2.AllLoot: ...
+    ) -> client_pb2.Credentials:
+        """*** Creds ***"""
+    @abc.abstractmethod
+    def CredsAdd(
+        self,
+        request: client_pb2.Credentials,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def CredsRm(
+        self,
+        request: client_pb2.Credentials,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def CredsUpdate(
+        self,
+        request: client_pb2.Credentials,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def GetCredByID(
+        self,
+        request: client_pb2.Credential,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Credential: ...
+    @abc.abstractmethod
+    def GetCredsByHashType(
+        self,
+        request: client_pb2.Credential,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Credentials: ...
+    @abc.abstractmethod
+    def GetPlaintextCredsByHashType(
+        self,
+        request: client_pb2.Credential,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Credentials: ...
+    @abc.abstractmethod
+    def CredsSniffHashType(
+        self,
+        request: client_pb2.Credential,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Credential: ...
     @abc.abstractmethod
     def Hosts(
         self,
@@ -774,7 +1060,7 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def GenerateExternal(
         self,
-        request: client_pb2.GenerateReq,
+        request: client_pb2.ExternalGenerateReq,
         context: grpc.ServicerContext,
     ) -> client_pb2.ExternalImplantConfig: ...
     @abc.abstractmethod
@@ -784,17 +1070,148 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> common_pb2.Empty: ...
     @abc.abstractmethod
-    def GenerateExternalGetImplantConfig(
+    def GenerateExternalGetBuildConfig(
         self,
-        request: client_pb2.ImplantConfig,
+        request: client_pb2.ImplantBuild,
         context: grpc.ServicerContext,
     ) -> client_pb2.ExternalImplantConfig: ...
+    @abc.abstractmethod
+    def GenerateStage(
+        self,
+        request: client_pb2.GenerateStageReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Generate: ...
+    @abc.abstractmethod
+    def StageImplantBuild(
+        self,
+        request: client_pb2.ImplantStageReq,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def GetHTTPC2Profiles(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.HTTPC2Configs:
+        """*** HTTP C2 Profiles ***"""
+    @abc.abstractmethod
+    def GetHTTPC2ProfileByName(
+        self,
+        request: client_pb2.C2ProfileReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.HTTPC2Config: ...
+    @abc.abstractmethod
+    def SaveHTTPC2Profile(
+        self,
+        request: client_pb2.HTTPC2ConfigReq,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def BuilderRegister(
+        self,
+        request: client_pb2.Builder,
+        context: grpc.ServicerContext,
+    ) -> collections.abc.Iterator[client_pb2.Event]:
+        """*** Builders ***"""
+    @abc.abstractmethod
+    def BuilderTrigger(
+        self,
+        request: client_pb2.Event,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def Builders(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Builders: ...
+    @abc.abstractmethod
+    def GetCertificateInfo(
+        self,
+        request: client_pb2.CertificatesReq,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.CertificateInfo:
+        """*** Certificates ***"""
+    @abc.abstractmethod
+    def CrackstationRegister(
+        self,
+        request: client_pb2.Crackstation,
+        context: grpc.ServicerContext,
+    ) -> collections.abc.Iterator[client_pb2.Event]:
+        """*** Crackstation ***"""
+    @abc.abstractmethod
+    def CrackstationTrigger(
+        self,
+        request: client_pb2.Event,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def CrackstationBenchmark(
+        self,
+        request: client_pb2.CrackBenchmark,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def Crackstations(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.Crackstations: ...
+    @abc.abstractmethod
+    def CrackTaskByID(
+        self,
+        request: client_pb2.CrackTask,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.CrackTask: ...
+    @abc.abstractmethod
+    def CrackTaskUpdate(
+        self,
+        request: client_pb2.CrackTask,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def CrackFilesList(
+        self,
+        request: client_pb2.CrackFile,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.CrackFiles: ...
+    @abc.abstractmethod
+    def CrackFileCreate(
+        self,
+        request: client_pb2.CrackFile,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.CrackFile: ...
+    @abc.abstractmethod
+    def CrackFileChunkUpload(
+        self,
+        request: client_pb2.CrackFileChunk,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def CrackFileChunkDownload(
+        self,
+        request: client_pb2.CrackFileChunk,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.CrackFileChunk: ...
+    @abc.abstractmethod
+    def CrackFileComplete(
+        self,
+        request: client_pb2.CrackFile,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
+    @abc.abstractmethod
+    def CrackFileDelete(
+        self,
+        request: client_pb2.CrackFile,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
     @abc.abstractmethod
     def Regenerate(
         self,
         request: client_pb2.RegenerateReq,
         context: grpc.ServicerContext,
-    ) -> client_pb2.Generate: ...
+    ) -> client_pb2.Generate:
+        """*** Payloads ***"""
     @abc.abstractmethod
     def ImplantBuilds(
         self,
@@ -844,12 +1261,6 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> client_pb2.ImplantProfile: ...
     @abc.abstractmethod
-    def MsfStage(
-        self,
-        request: client_pb2.MsfStagerReq,
-        context: grpc.ServicerContext,
-    ) -> client_pb2.MsfStager: ...
-    @abc.abstractmethod
     def ShellcodeRDI(
         self,
         request: client_pb2.ShellcodeRDIReq,
@@ -873,6 +1284,24 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         request: common_pb2.Empty,
         context: grpc.ServicerContext,
     ) -> client_pb2.ShellcodeEncoderMap: ...
+    @abc.abstractmethod
+    def TrafficEncoderMap(
+        self,
+        request: common_pb2.Empty,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.TrafficEncoderMap: ...
+    @abc.abstractmethod
+    def TrafficEncoderAdd(
+        self,
+        request: client_pb2.TrafficEncoder,
+        context: grpc.ServicerContext,
+    ) -> client_pb2.TrafficEncoderTests: ...
+    @abc.abstractmethod
+    def TrafficEncoderRm(
+        self,
+        request: client_pb2.TrafficEncoder,
+        context: grpc.ServicerContext,
+    ) -> common_pb2.Empty: ...
     @abc.abstractmethod
     def Websites(
         self,
@@ -966,6 +1395,12 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> sliver_pb2.Mv: ...
     @abc.abstractmethod
+    def Cp(
+        self,
+        request: sliver_pb2.CpReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Cp: ...
+    @abc.abstractmethod
     def Rm(
         self,
         request: sliver_pb2.RmReq,
@@ -989,6 +1424,54 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         request: sliver_pb2.UploadReq,
         context: grpc.ServicerContext,
     ) -> sliver_pb2.Upload: ...
+    @abc.abstractmethod
+    def Grep(
+        self,
+        request: sliver_pb2.GrepReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Grep: ...
+    @abc.abstractmethod
+    def Chmod(
+        self,
+        request: sliver_pb2.ChmodReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Chmod: ...
+    @abc.abstractmethod
+    def Chown(
+        self,
+        request: sliver_pb2.ChownReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Chown: ...
+    @abc.abstractmethod
+    def Chtimes(
+        self,
+        request: sliver_pb2.ChtimesReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Chtimes: ...
+    @abc.abstractmethod
+    def MemfilesList(
+        self,
+        request: sliver_pb2.MemfilesListReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Ls: ...
+    @abc.abstractmethod
+    def MemfilesAdd(
+        self,
+        request: sliver_pb2.MemfilesAddReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.MemfilesAdd: ...
+    @abc.abstractmethod
+    def MemfilesRm(
+        self,
+        request: sliver_pb2.MemfilesRmReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.MemfilesRm: ...
+    @abc.abstractmethod
+    def Mount(
+        self,
+        request: sliver_pb2.MountReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Mount: ...
     @abc.abstractmethod
     def ProcessDump(
         self,
@@ -1086,6 +1569,24 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         context: grpc.ServicerContext,
     ) -> sliver_pb2.CurrentTokenOwner: ...
     @abc.abstractmethod
+    def Services(
+        self,
+        request: sliver_pb2.ServicesReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.Services: ...
+    @abc.abstractmethod
+    def ServiceDetail(
+        self,
+        request: sliver_pb2.ServiceDetailReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.ServiceDetail: ...
+    @abc.abstractmethod
+    def StartServiceByName(
+        self,
+        request: sliver_pb2.StartServiceByNameReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.ServiceInfo: ...
+    @abc.abstractmethod
     def PivotStartListener(
         self,
         request: sliver_pb2.PivotStartListenerReq,
@@ -1155,9 +1656,9 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
     @abc.abstractmethod
     def Backdoor(
         self,
-        request: sliver_pb2.BackdoorReq,
+        request: client_pb2.BackdoorReq,
         context: grpc.ServicerContext,
-    ) -> sliver_pb2.Backdoor: ...
+    ) -> client_pb2.Backdoor: ...
     @abc.abstractmethod
     def RegistryRead(
         self,
@@ -1194,6 +1695,12 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         request: sliver_pb2.RegistryListValuesReq,
         context: grpc.ServicerContext,
     ) -> sliver_pb2.RegistryValuesList: ...
+    @abc.abstractmethod
+    def RegistryReadHive(
+        self,
+        request: sliver_pb2.RegistryReadHiveReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.RegistryReadHive: ...
     @abc.abstractmethod
     def RunSSHCommand(
         self,
@@ -1236,7 +1743,7 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         request: sliver_pb2.OpenSession,
         context: grpc.ServicerContext,
     ) -> sliver_pb2.OpenSession:
-        """Beacon only commands"""
+        """*** Beacon *** -only commands"""
     @abc.abstractmethod
     def CloseSession(
         self,
@@ -1249,7 +1756,7 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         request: sliver_pb2.RegisterExtensionReq,
         context: grpc.ServicerContext,
     ) -> sliver_pb2.RegisterExtension:
-        """Extensions"""
+        """*** Extensions ***"""
     @abc.abstractmethod
     def CallExtension(
         self,
@@ -1262,6 +1769,25 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
         request: sliver_pb2.ListExtensionsReq,
         context: grpc.ServicerContext,
     ) -> sliver_pb2.ListExtensions: ...
+    @abc.abstractmethod
+    def RegisterWasmExtension(
+        self,
+        request: sliver_pb2.RegisterWasmExtensionReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.RegisterWasmExtension:
+        """*** Wasm Extensions ***"""
+    @abc.abstractmethod
+    def ListWasmExtensions(
+        self,
+        request: sliver_pb2.ListWasmExtensionsReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.ListWasmExtensions: ...
+    @abc.abstractmethod
+    def ExecWasmExtension(
+        self,
+        request: sliver_pb2.ExecWasmExtensionReq,
+        context: grpc.ServicerContext,
+    ) -> sliver_pb2.ExecWasmExtension: ...
     @abc.abstractmethod
     def WGStartPortForward(
         self,
@@ -1358,6 +1884,4 @@ class SliverRPCServicer(metaclass=abc.ABCMeta):
     ) -> collections.abc.Iterator[client_pb2.Event]:
         """*** Events ***"""
 
-def add_SliverRPCServicer_to_server(
-    servicer: SliverRPCServicer, server: grpc.Server
-) -> None: ...
+def add_SliverRPCServicer_to_server(servicer: SliverRPCServicer, server: grpc.Server) -> None: ...

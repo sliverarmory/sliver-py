@@ -1,4 +1,5 @@
-from ward import fixture, test
+import pytest
+import pytest_asyncio
 
 from sliver import SliverClient
 from sliver.session import InteractiveSession
@@ -6,111 +7,95 @@ from sliver.session import InteractiveSession
 from .test_client import sliver_client, sliverpy_random_name
 
 
-@fixture(scope="module")
-async def session_zero(client: SliverClient = sliver_client) -> InteractiveSession:  # type: ignore
-    sessions = await client.sessions()
-    return await client.interact_session(sessions[0].ID)  # type: ignore
+@pytest_asyncio.fixture(scope="function")
+async def session_zero(sliver_client: SliverClient) -> InteractiveSession:
+    sessions = await sliver_client.sessions()
+    return await sliver_client.interact_session(sessions[0].ID)
+
+@pytest.mark.asyncio
+async def test_ping(session_zero: InteractiveSession):
+    assert await session_zero.ping()
 
 
-@test("InteractiveObject can send ping to server", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.ping()
+@pytest.mark.asyncio
+async def test_ps(session_zero: InteractiveSession):
+    assert await session_zero.ps()
 
 
-@test("InteractiveObject can list processes", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.ps()
+@pytest.mark.asyncio
+async def test_ifconfig(session_zero: InteractiveSession):
+    assert await session_zero.ifconfig()
 
 
-@test("InteractiveObject can get network interfaces", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.ifconfig()
+@pytest.mark.asyncio
+async def test_netstat(session_zero: InteractiveSession):
+    assert await session_zero.netstat(True, True, True, True, True)
 
 
-@test("InteractiveObject can get network connections", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.netstat(True, True, True, True, True)
+@pytest.mark.asyncio
+async def test_pwd(session_zero: InteractiveSession):
+    assert await session_zero.pwd()
 
 
-@test("InteractiveObject can get working directory", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.pwd()
+@pytest.mark.asyncio
+async def test_ls(session_zero: InteractiveSession):
+    assert await session_zero.ls()
 
 
-@test("InteractiveObject can list directory", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.ls()
+@pytest.mark.asyncio
+async def test_cd(session_zero: InteractiveSession):
+    assert await session_zero.cd(".")
 
 
-@test("InteractiveObject can change directory", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.cd(".")
+@pytest.mark.asyncio
+async def test_mkdir(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.mkdir(sliverpy_random_name)
 
 
-@test("InteractiveObject can make a directory", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero, target_dir: str = sliverpy_random_name  # type: ignore
-):
-    assert await session.mkdir(target_dir)
+@pytest.mark.asyncio
+async def test_upload(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.upload(sliverpy_random_name + "/sliverpy.txt", b"sliverpy")
 
 
-@test("InteractiveObject can upload a file", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero,  # type: ignore
-    target_dir: str = sliverpy_random_name,  # type: ignore
-):
-    assert await session.upload(target_dir + "/sliverpy.txt", b"sliverpy")
+@pytest.mark.asyncio
+async def test_download(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.download(sliverpy_random_name, True)
 
 
-@test("InteractiveObject can download files", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero,  # type: ignore
-    target_dir: str = sliverpy_random_name,  # type: ignore
-):
-    assert await session.download(target_dir, True)
+@pytest.mark.asyncio
+async def test_rm(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.rm(sliverpy_random_name, recursive=True, force=True)
 
 
-@test("InteractiveObject can remove a directory", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero, path: str = sliverpy_random_name  # type: ignore
-):
-    assert await session.rm(path, recursive=True, force=True)
+@pytest.mark.asyncio
+async def test_set_env(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.set_env("SLIVERPY_TEST", sliverpy_random_name)
 
 
-@test("InteractiveObject can set an environment variable", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero, value: str = sliverpy_random_name  # type: ignore
-):
-    assert await session.set_env("SLIVERPY_TEST", value)
+@pytest.mark.asyncio
+async def test_get_env(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.get_env(sliverpy_random_name)
 
 
-@test("InteractiveObject can get an environment variable", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero, value: str = sliverpy_random_name  # type: ignore
-):
-    assert await session.get_env(value)
+@pytest.mark.asyncio
+async def test_unset_env(session_zero: InteractiveSession, sliverpy_random_name: str):
+    assert await session_zero.unset_env(sliverpy_random_name)
 
 
-@test("InteractiveObject can unset an environment variable", tags=["interactive"])
-async def _(
-    session: InteractiveSession = session_zero, value: str = sliverpy_random_name  # type: ignore
-):
-    assert await session.unset_env(value)
+@pytest.mark.asyncio
+async def test_screenshot(session_zero: InteractiveSession):
+    assert await session_zero.screenshot()
 
 
-@test("InteractiveObject can take a screenshot", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    assert await session.screenshot()
-
-
-@test("InteractiveObject can take a memory dump", tags=["interactive"])
-async def _(session: InteractiveSession = session_zero):  # type: ignore
-    procs = await session.ps()
+@pytest.mark.asyncio
+async def test_process_dump(session_zero: InteractiveSession):
+    procs = await session_zero.ps()
     found_process = False
-    for proc in procs[::-1]:
-        if proc.Owner == session.username:
-            dump = await session.process_dump(proc.Pid)
+    for proc in reversed(procs):
+        if proc.Owner == session_zero.username:
+            dump = await session_zero.process_dump(proc.Pid)
             if len(dump.Data) > 0:
                 found_process = True
                 break
     assert found_process
+

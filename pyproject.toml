@@ -7,19 +7,16 @@ name = "sliver-py"
 description = "Sliver gRPC client library."
 readme = "README.md"
 license-files = { paths = ["LICENSE"] }
-requires-python = ">=3.7"
+requires-python = ">=3.13"
 authors = [
     { name = "moloch", email = "875022+moloch--@users.noreply.github.com" },
     { name = "daddycocoaman", email = "daddycocoaman@gmail.com"}
 ]
 classifiers = [
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "grpcio~=1.47",
+    "grpcio~=1.71",
     "grpcio-tools~=1.47",
     "mypy-protobuf~=3.3.0",
     "typing_extensions~=4.4.0; python_version < '3.8'",
@@ -36,7 +33,6 @@ extra-dependencies = [
     "rich~=12.5",
     "black~=22.6", 
     "isort~=5.10",
-    "ward~=0.66.1b0",
     "sphinx~=5.1", 
     "sphinx-rtd-theme~=1.0.0", 
     "sphinx-autodoc-typehints~=1.19.4",

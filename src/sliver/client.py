@@ -381,24 +381,21 @@ class SliverClient(BaseClient):
         self,
         host: str = "0.0.0.0",
         port: int = 8888,
-        persistent: bool = False,
         timeout=TIMEOUT,
-    ) -> client_pb2.MTLSListener:
+    ) -> client_pb2.MTLSListenerReq:
         """Start a mutual TLS (mTLS) C2 listener
 
         :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         :return: Protobuf MTLSListener object
         :rtype: client_pb2.MTLSListener
         """
         mtls_req = client_pb2.MTLSListenerReq(
-            Host=host, Port=port, Persistent=persistent
+            Host=host, Port=port,
         )
         return await self._stub.StartMTLSListener(mtls_req, timeout=timeout)
 
@@ -409,9 +406,8 @@ class SliverClient(BaseClient):
         port: int = 53,
         n_port: int = 8888,
         key_port: int = 1337,
-        persistent: bool = False,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.WGListener:
+    ) -> client_pb2.WGListenerReq:
         """Start a WireGuard (wg) C2 listener
 
         :param tun_ip: Virtual TUN IP listen address
@@ -424,8 +420,6 @@ class SliverClient(BaseClient):
         :type n_port: int
         :param key_port: Virtual TUN port number for key exchanges
         :type key_port: int
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         :return: Protobuf WGListener object
@@ -441,7 +435,6 @@ class SliverClient(BaseClient):
             Port=port,
             NPort=n_port,
             KeyPort=key_port,
-            Persistent=persistent,
         )
         return await self._stub.StartWGListener(wg_req, timeout=timeout)
 
@@ -451,10 +444,9 @@ class SliverClient(BaseClient):
         host: str = "0.0.0.0",
         port: int = 53,
         canaries: bool = True,
-        persistent: bool = False,
         enforce_otp=True,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.DNSListener:
+    ) -> client_pb2.DNSListenerReq:
         """Start a DNS C2 listener
 
         :param domains: C2 domains to listen for
@@ -465,8 +457,6 @@ class SliverClient(BaseClient):
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param enforce_otp: Enforce OTP auth for DNS C2, defaults to True
         :type enforce_otp: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -482,7 +472,6 @@ class SliverClient(BaseClient):
             Canaries=canaries,
             Host=host,
             Port=port,
-            Persistent=persistent,
             EnforceOTP=enforce_otp,
         )
         return await self._stub.StartDNSListener(dns_req, timeout=timeout)
@@ -493,9 +482,8 @@ class SliverClient(BaseClient):
         port: int = 80,
         website: str = "",
         domain: str = "",
-        persistent: bool = False,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.HTTPListener:
+    ) -> client_pb2.HTTPListenerReq:
         """Start an HTTP C2 listener
 
 
@@ -507,8 +495,6 @@ class SliverClient(BaseClient):
         :type website: str
         :param domain: Domain name for HTTP server (one domain per listener)
         :type domain: str
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         :return: Protobuf HTTPListener object (NOTE: HTTP/HTTPS both return HTTPListener objects)
@@ -520,7 +506,6 @@ class SliverClient(BaseClient):
             Port=port,
             Secure=False,
             Website=website,
-            Persistent=persistent,
         )
         return await self._stub.StartHTTPListener(http_req, timeout=timeout)
 
@@ -533,13 +518,12 @@ class SliverClient(BaseClient):
         cert: bytes = b"",
         key: bytes = b"",
         acme: bool = False,
-        persistent: bool = False,
         enforce_otp: bool = True,
         randomize_jarm: bool = True,
         long_poll_timeout: int = 1,
         long_poll_jitter: int = 2,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.HTTPListener:
+    ) -> client_pb2.HTTPListenerReq:
         """Start an HTTPS C2 listener
 
         :param domain: Domain name for HTTPS server (one domain per listener)
@@ -556,8 +540,6 @@ class SliverClient(BaseClient):
         :type key: bytes
         :param acme: Automatically provision TLS certificate using ACME (i.e., Let's Encrypt)
         :type acme: bool
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param enforce_otp: Enforce OTP auth for HTTPS C2, defaults to True
         :type enforce_otp: bool, optional
         :param randomize_jarm: Randomize JARM fingerprint for HTTPS C2, defaults to True
@@ -580,7 +562,6 @@ class SliverClient(BaseClient):
             Cert=cert,
             Key=key,
             ACME=acme,
-            Persistent=persistent,
             EnforceOTP=enforce_otp,
             LongPollTimeout=long_poll_timeout,
             LongPollJitter=long_poll_jitter,
@@ -590,7 +571,7 @@ class SliverClient(BaseClient):
 
     async def start_tcp_stager_listener(
         self, host: str, port: int, data: bytes, timeout=TIMEOUT
-    ) -> client_pb2.StagerListener:
+    ) -> client_pb2.StagerListenerReq:
         """Start a TCP stager listener
 
         :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
@@ -678,10 +659,12 @@ class SliverClient(BaseClient):
         return await self._stub.StartHTTPStagerListener(stage_req, timeout=timeout)
 
     async def generate_implant(
-        self, config: client_pb2.ImplantConfig, timeout: int = 360
+        self, implant_name: str, config: client_pb2.ImplantConfig, timeout: int = 360
     ) -> client_pb2.Generate:
         """Generate a new implant using a given configuration
 
+        :param implant_name: The name of the implant to generate (optional)
+        :type implant_name: str
         :param config: Protobuf ImplantConfig object
         :type config: client_pb2.ImplantConfig
         :param timeout: gRPC timeout, defaults to 360
@@ -689,7 +672,7 @@ class SliverClient(BaseClient):
         :return: Protobuf Generate object containing the generated implant
         :rtype: client_pb2.Generate
         """
-        req = client_pb2.GenerateReq(Config=config)
+        req = client_pb2.GenerateReq(Name=implant_name, Config=config)
         return await self._stub.Generate(req, timeout=timeout)
 
     async def regenerate_implant(

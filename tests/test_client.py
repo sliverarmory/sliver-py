@@ -180,6 +180,8 @@ async def test_client_can_start_tcp_stager_listener(sliver_client):
 async def test_client_can_kill_jobs(sliver_client):
     jobs = await sliver_client.jobs()
     for job in jobs:
+        if job.Port == 9000:
+            pdb.set_trace()
         if job.Port != 80 and job.Port != 31337:
             await sliver_client.kill_job(job.ID)
     assert len(await sliver_client.jobs()) == 2

@@ -127,18 +127,6 @@ passed between the client and server (and not to the implant).
 .. autoclass:: sliver.pb.clientpb.client_pb2.MigrateReq
     :members:
 
-.. autoclass:: sliver.pb.clientpb.client_pb2.MSFRemoteReq
-    :members:
-
-.. autoclass:: sliver.pb.clientpb.client_pb2.MSFReq
-    :members:
-
-.. autoclass:: sliver.pb.clientpb.client_pb2.MsfStager
-    :members:
-
-.. autoclass:: sliver.pb.clientpb.client_pb2.MsfStagerReq
-    :members:
-
 .. autoclass:: sliver.pb.clientpb.client_pb2.MTLSListener
     :members:
 

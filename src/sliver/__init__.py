@@ -8,8 +8,3 @@ from .session import InteractiveSession
 
 __version__ = "0.0.19"
 
-
-if os.getenv("HATCH_ENV_ACTIVE"):
-    from rich import traceback
-
-    traceback.install(show_locals=True)

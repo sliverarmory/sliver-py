@@ -101,13 +101,6 @@ hatch config set dirs.env.virtual .venv
 hatch config update
 ```
 
-### Setting up Hatch environment
-
-Once installed, run `hatch -e dev shell` to enter the development environment. Hatch allows for scripts to be defined as well. These scripts are executed in the context of the defined environment. The current scripts defined are:
-
-
-- `hatch run dev:fmt`  -- runs `black` and `isort` for formatting
-
 ### Docker/WSL2
 
 A Dockerfile is included if you wish to develop inside a container. This may be preferable for development on any operating system to keep the dev environment isolated. Windows developers may choose to develop inside WSL2.
@@ -121,11 +114,9 @@ Alternatively, you can still choose to set up an external Sliver instance to con
 ### Updating protobufs
 This should only be necessary when changes are made to Sliver's protobuf. Running `scripts/protobufgen.py` will update `sliver-py` protobuf files. Ensure that the `.pyi` type hints are generated also.
 
+- `uv run scripts/protobufgen.py`
+
 ### Running tests
 To run tests, you should have at least one beacon implant and one session implant connected to you Sliver instance. Currently, it is ok to only have them running on a Linux system (implants running on your sliver server works fine). In the future, you may need to have a session implant on the type of operating system the test is for, particularly for Windows.
 
-Tests are implemented using [Ward](https://github.com/darrenburns/ward). The tests have been tagged so you can run all the tests or just the tests you need. Recommendation is to run all tests when making a major change.
-
-- `ward` : All tests
-- `ward --tags client`: Client tests only
-- `ward --tags interactive`: InteractiveObject tests
+- `uv run pytest` : All tests

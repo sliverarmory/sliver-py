@@ -790,49 +790,6 @@ class SliverClient(BaseClient):
         """
         return await self._stub.SaveImplantProfile(profile, timeout=timeout)
 
-    async def generate_msf_stager(
-        self,
-        arch: str,
-        format: str,
-        host: str,
-        port: int,
-        os: str,
-        protocol: client_pb2.StageProtocol.ValueType,
-        badchars: Optional[Iterable[str]],
-        timeout: int = TIMEOUT,
-    ) -> client_pb2.MsfStager:
-        """Create a Metasploit stager (if available on the server)
-
-        :param arch: CPU architecture
-        :type arch: str
-        :param format: Binary format (MSF)
-        :type format: str
-        :param host: LHOST (MSF)
-        :type host: str
-        :param port: LPORT (MSF)
-        :type port: int
-        :param os: Operating System (MSF)
-        :type os: str
-        :param protocol: Stager protocol (Protobuf StageProtocol object)
-        :type protocol: client_pb2.StageProtocol
-        :param badchars: Bad characters, defaults to []
-        :type badchars: list, optional
-        :param timeout: gRPC timeout, defaults to 60 seconds
-        :type timeout: int, optional
-        :return: Protobuf MsfStager object
-        :rtype: client_pb2.MsfStager
-        """
-        stagerReq = client_pb2.MsfStagerReq(
-            Arch=arch,
-            Format=format,
-            Host=host,
-            Port=port,
-            OS=os,
-            Protocol=protocol,
-            BadChars=badchars if badchars else [],
-        )
-        return await self._stub.MsfStage(stagerReq, timeout=timeout)
-
     async def shellcode(
         self, data: bytes, function_name: str, arguments: str = "", timeout=TIMEOUT
     ) -> client_pb2.ShellcodeRDI:

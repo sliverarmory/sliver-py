@@ -1902,6 +1902,7 @@ class ListenerJob(Message):
     DNSCONF_FIELD_NUMBER: int
     HTTPCONF_FIELD_NUMBER: int
     MULTICONF_FIELD_NUMBER: int
+    TCPCONF_FIELD_NUMBER: int
     ID: str
     Type: str
     JobID: int
@@ -1915,6 +1916,8 @@ class ListenerJob(Message):
     def HTTPConf(self) -> HTTPListenerReq: ...
     @property
     def MultiConf(self) -> MultiplayerListenerReq: ...
+    @property
+    def TCPConf(self) -> StagerListenerReq: ...
     def __init__(
         self,
         *,
@@ -1926,9 +1929,10 @@ class ListenerJob(Message):
         DNSConf: DNSListenerReq | None = ...,
         HTTPConf: HTTPListenerReq | None = ...,
         MultiConf: MultiplayerListenerReq | None = ...,
+        TCPConf: StagerListenerReq | None = ...,
     ) -> None: ...
-    def HasField(self, field_name: typing_extensions.Literal["DNSConf", b"DNSConf", "HTTPConf", b"HTTPConf", "MTLSConf", b"MTLSConf", "MultiConf", b"MultiConf", "WGConf", b"WGConf"]) -> bool: ...
-    def ClearField(self, field_name: typing_extensions.Literal["DNSConf", b"DNSConf", "HTTPConf", b"HTTPConf", "ID", b"ID", "JobID", b"JobID", "MTLSConf", b"MTLSConf", "MultiConf", b"MultiConf", "Type", b"Type", "WGConf", b"WGConf"]) -> None: ...
+    def HasField(self, field_name: typing_extensions.Literal["DNSConf", b"DNSConf", "HTTPConf", b"HTTPConf", "MTLSConf", b"MTLSConf", "MultiConf", b"MultiConf", "TCPConf", b"TCPConf", "WGConf", b"WGConf"]) -> bool: ...
+    def ClearField(self, field_name: typing_extensions.Literal["DNSConf", b"DNSConf", "HTTPConf", b"HTTPConf", "ID", b"ID", "JobID", b"JobID", "MTLSConf", b"MTLSConf", "MultiConf", b"MultiConf", "TCPConf", b"TCPConf", "Type", b"Type", "WGConf", b"WGConf"]) -> None: ...
 
 class MultiplayerListenerReq(Message):
     DESCRIPTOR: Descriptor
@@ -2299,17 +2303,11 @@ class StagerListenerReq(Message):
     HOST_FIELD_NUMBER: int
     PORT_FIELD_NUMBER: int
     DATA_FIELD_NUMBER: int
-    CERT_FIELD_NUMBER: int
-    KEY_FIELD_NUMBER: int
-    ACME_FIELD_NUMBER: int
     PROFILENAME_FIELD_NUMBER: int
     Protocol: StageProtocol.ValueType
     Host: str
     Port: int
     Data: bytes
-    Cert: bytes
-    Key: bytes
-    ACME: bool
     ProfileName: str
     def __init__(
         self,
@@ -2318,12 +2316,9 @@ class StagerListenerReq(Message):
         Host: str = ...,
         Port: int = ...,
         Data: bytes = ...,
-        Cert: bytes = ...,
-        Key: bytes = ...,
-        ACME: bool = ...,
         ProfileName: str = ...,
     ) -> None: ...
-    def ClearField(self, field_name: typing_extensions.Literal["ACME", b"ACME", "Cert", b"Cert", "Data", b"Data", "Host", b"Host", "Key", b"Key", "Port", b"Port", "ProfileName", b"ProfileName", "Protocol", b"Protocol"]) -> None: ...
+    def ClearField(self, field_name: typing_extensions.Literal["Data", b"Data", "Host", b"Host", "Port", b"Port", "ProfileName", b"ProfileName", "Protocol", b"Protocol"]) -> None: ...
 
 class StagerListener(Message):
     DESCRIPTOR: Descriptor
@@ -2366,55 +2361,6 @@ class ShellcodeRDI(Message):
         Data: bytes = ...,
     ) -> None: ...
     def ClearField(self, field_name: typing_extensions.Literal["Data", b"Data"]) -> None: ...
-
-class MsfStagerReq(Message):
-    DESCRIPTOR: Descriptor
-
-    ARCH_FIELD_NUMBER: int
-    FORMAT_FIELD_NUMBER: int
-    PORT_FIELD_NUMBER: int
-    HOST_FIELD_NUMBER: int
-    OS_FIELD_NUMBER: int
-    PROTOCOL_FIELD_NUMBER: int
-    BADCHARS_FIELD_NUMBER: int
-    HTTPC2CONFIGNAME_FIELD_NUMBER: int
-    Arch: str
-    Format: str
-    Port: int
-    Host: str
-    OS: str
-    """reserved for future usage"""
-    Protocol: StageProtocol.ValueType
-    @property
-    def BadChars(self) -> RepeatedScalarFieldContainer[str]: ...
-    HTTPC2ConfigName: str
-    def __init__(
-        self,
-        *,
-        Arch: str = ...,
-        Format: str = ...,
-        Port: int = ...,
-        Host: str = ...,
-        OS: str = ...,
-        Protocol: StageProtocol.ValueType = ...,
-        BadChars: Iterable[str] | None = ...,
-        HTTPC2ConfigName: str = ...,
-    ) -> None: ...
-    def ClearField(self, field_name: typing_extensions.Literal["Arch", b"Arch", "BadChars", b"BadChars", "Format", b"Format", "HTTPC2ConfigName", b"HTTPC2ConfigName", "Host", b"Host", "OS", b"OS", "Port", b"Port", "Protocol", b"Protocol"]) -> None: ...
-
-class MsfStager(Message):
-    DESCRIPTOR: Descriptor
-
-    FILE_FIELD_NUMBER: int
-    @property
-    def File(self) -> File: ...
-    def __init__(
-        self,
-        *,
-        File: File | None = ...,
-    ) -> None: ...
-    def HasField(self, field_name: typing_extensions.Literal["File", b"File"]) -> bool: ...
-    def ClearField(self, field_name: typing_extensions.Literal["File", b"File"]) -> None: ...
 
 class GetSystemReq(Message):
     """GetSystemReq - Client request to the server which is translated into

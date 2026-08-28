@@ -82,7 +82,7 @@ if __name__ == "__main__":
 ```
 
 `InteractiveSession.session` returns a defensive copy of the complete
-`models.clientpb.Session` metadata model. Convenience properties such as
+`sliver.models.clientpb.Session` metadata model. Convenience properties such as
 `session_id`, `name`, `hostname`, `os`, `arch`, and `pid` expose common fields.
 The interaction shares the client's channel, so closing the client completes
 its cleanup.
@@ -136,34 +136,40 @@ if __name__ == "__main__":
 
 Closing an `InteractiveBeacon` stops its local task-result watcher; it does not terminate or remove the remote beacon.
 `InteractiveBeacon.beacon` returns a defensive copy of the complete
-`models.clientpb.Beacon` metadata model, with matching scalar convenience
+`sliver.models.clientpb.Beacon` metadata model, with matching scalar convenience
 properties such as `beacon_id`, `name`, `hostname`, `os`, `arch`, and `pid`.
 
 ## Pydantic models
 
-Every top-level Sliver API message and enum has a Pydantic counterpart at `sliver.models.<package>.<Type>`. Nested messages and enums remain attributes of their containing model, such as `models.sliverpb.SockTabEntry.SockAddr`, while map entries become normal dictionaries. Model attributes and constructor arguments use Python `snake_case`; original schema field names remain accepted as validation aliases.
+Every top-level Sliver API message and enum is a concrete, importable Python
+class under `sliver.models`. For example, `Event` and `Session` are defined in
+`sliver.models.clientpb`, while `File` is defined in
+`sliver.models.commonpb`. Nested messages and enums remain attributes of their
+containing model, while map entries become normal dictionaries. Model
+attributes and constructor arguments use Python `snake_case`; original schema
+field names remain accepted as validation aliases.
 
 ```python
-from sliver import models
+from sliver.models.clientpb import ImplantC2, ImplantConfig, OutputFormat, RenameReq
 
 # Preferred v0.1 spelling.
-request = models.clientpb.RenameReq(
+request = RenameReq(
     session_id="session-id",
     name="web-server",
 )
 
 # Schema-shaped mappings are accepted at Pydantic validation boundaries.
-same_request = models.clientpb.RenameReq.model_validate(
+same_request = RenameReq.model_validate(
     {"SessionID": "session-id", "Name": "web-server"}
 )
 assert same_request.session_id == request.session_id
 
 # Enum fields use generated IntEnum members, and nested messages use models.
-implant_config = models.clientpb.ImplantConfig(
+implant_config = ImplantConfig(
     goos="linux",
     goarch="amd64",
-    format=models.clientpb.OutputFormat.EXECUTABLE,
-    c2=[models.clientpb.ImplantC2(url="mtls://127.0.0.1:8888")],
+    format=OutputFormat.EXECUTABLE,
+    c2=[ImplantC2(url="mtls://127.0.0.1:8888")],
     include_mtls=True,
 )
 ```
@@ -178,7 +184,7 @@ await client.pydantic_stub.Rename(request)
 
 `pydantic_stub` is available only while the client is connected and validates each RPC's request model. The generated wire implementation is private: external callers neither pass nor receive generated transport messages.
 
-See the [Pydantic model API](https://sliverpy.readthedocs.io/en/latest/models.html) for namespaces, serialization, aliases, nested types, field presence, and validation details.
+See the [Pydantic model API](https://sliverpy.readthedocs.io/en/latest/models.html) for modules, serialization, aliases, nested types, field presence, and validation details.
 
 ## Development
 
@@ -214,7 +220,7 @@ Alternatively, you can still choose to set up an external Sliver instance to con
 
 ### Updating generated models
 
-The repository records an exact Sliver submodule commit so local generation and CI use the same API definitions. When intentionally updating for a release, advance the submodule on its configured branch, review and stage the resulting gitlink, then regenerate the private transport modules and Pydantic model inputs:
+The repository records an exact Sliver submodule commit so local generation and CI use the same API definitions. When intentionally updating for a release, advance the submodule on its configured branch, review and stage the resulting gitlink, then regenerate the private transport modules and concrete Pydantic modules:
 
 ```console
 git submodule update --init --remote sliver

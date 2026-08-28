@@ -1,15 +1,18 @@
 from __future__ import annotations
 
-from functools import cache
-from typing import Any
+import importlib
+import inspect
+import pickle
+from types import ModuleType
+from typing import get_type_hints
 
 import pytest
-from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
-from google.protobuf.descriptor import FieldDescriptor
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from sliver import models
+from sliver._pb.clientpb import client_pb2
 from sliver._pb.commonpb import common_pb2
+from sliver._pb.sliverpb import sliver_pb2
 from sliver.models import (
     MODEL_REGISTRY,
     ProtobufEnum,
@@ -19,165 +22,32 @@ from sliver.models import (
     _protobuf_to_pydantic,
     get_pydantic_model,
 )
+from sliver.models.clientpb import Event, Session
 
 
-def _add_field(
-    message: descriptor_pb2.DescriptorProto,
-    *,
-    name: str,
-    number: int,
-    type_: int,
-    label: int = FieldDescriptor.LABEL_OPTIONAL,
-    type_name: str | None = None,
-    oneof_index: int | None = None,
-    proto3_optional: bool = False,
-) -> None:
-    field = message.field.add()
-    field.name = name
-    field.number = number
-    field.type = type_
-    field.label = label
-    if type_name is not None:
-        field.type_name = type_name
-    if oneof_index is not None:
-        field.oneof_index = oneof_index
-    field.proto3_optional = proto3_optional
+def test_model_packages_are_real_importable_python_modules() -> None:
+    client_models = importlib.import_module("sliver.models.clientpb")
+
+    assert isinstance(models.clientpb, ModuleType)
+    assert client_models is models.clientpb
+    assert client_models.Event is Event
+    assert Event.__module__ == "sliver.models.clientpb"
+    assert issubclass(Event, BaseModel)
+    assert "class Event(ProtobufModel):" in inspect.getsource(Event)
+    assert get_type_hints(Event)["event_type"] is str
 
 
-@cache
-def _feature_message_type() -> type[Any]:
-    file_proto = descriptor_pb2.FileDescriptorProto(
-        name="sliver_py_model_features.proto",
-        package="featurepb",
-        syntax="proto3",
+def test_concrete_models_are_picklable_and_preserve_nested_model_types() -> None:
+    event = Event(
+        event_type="session-opened",
+        session=Session(id="session-id", name="operator-session"),
     )
 
-    state = file_proto.enum_type.add(name="State")
-    state.value.add(name="STATE_UNKNOWN", number=0)
-    state.value.add(name="STATE_RUNNING", number=1)
+    restored = pickle.loads(pickle.dumps(event))
 
-    child = file_proto.message_type.add(name="Child")
-    _add_field(
-        child,
-        name="ValueText",
-        number=1,
-        type_=FieldDescriptor.TYPE_STRING,
-    )
-
-    feature = file_proto.message_type.add(name="Feature")
-    feature.oneof_decl.add(name="Choice")
-    feature.oneof_decl.add(name="_OptionalCount")
-
-    child_map = feature.nested_type.add(name="ChildrenByNameEntry")
-    child_map.options.map_entry = True
-    _add_field(
-        child_map,
-        name="key",
-        number=1,
-        type_=FieldDescriptor.TYPE_STRING,
-    )
-    _add_field(
-        child_map,
-        name="value",
-        number=2,
-        type_=FieldDescriptor.TYPE_MESSAGE,
-        type_name=".featurepb.Child",
-    )
-
-    bytes_map = feature.nested_type.add(name="BytesByNameEntry")
-    bytes_map.options.map_entry = True
-    _add_field(
-        bytes_map,
-        name="key",
-        number=1,
-        type_=FieldDescriptor.TYPE_STRING,
-    )
-    _add_field(
-        bytes_map,
-        name="value",
-        number=2,
-        type_=FieldDescriptor.TYPE_BYTES,
-    )
-
-    _add_field(
-        feature,
-        name="PayloadData",
-        number=1,
-        type_=FieldDescriptor.TYPE_BYTES,
-    )
-    _add_field(
-        feature,
-        name="ChildItems",
-        number=2,
-        type_=FieldDescriptor.TYPE_MESSAGE,
-        label=FieldDescriptor.LABEL_REPEATED,
-        type_name=".featurepb.Child",
-    )
-    _add_field(
-        feature,
-        name="ChildrenByName",
-        number=3,
-        type_=FieldDescriptor.TYPE_MESSAGE,
-        label=FieldDescriptor.LABEL_REPEATED,
-        type_name=".featurepb.Feature.ChildrenByNameEntry",
-    )
-    _add_field(
-        feature,
-        name="State",
-        number=4,
-        type_=FieldDescriptor.TYPE_ENUM,
-        type_name=".featurepb.State",
-    )
-    _add_field(
-        feature,
-        name="OptionalCount",
-        number=5,
-        type_=FieldDescriptor.TYPE_INT32,
-        oneof_index=1,
-        proto3_optional=True,
-    )
-    _add_field(
-        feature,
-        name="TextValue",
-        number=6,
-        type_=FieldDescriptor.TYPE_STRING,
-        oneof_index=0,
-    )
-    _add_field(
-        feature,
-        name="ChildValue",
-        number=7,
-        type_=FieldDescriptor.TYPE_MESSAGE,
-        type_name=".featurepb.Child",
-        oneof_index=0,
-    )
-    _add_field(
-        feature,
-        name="Next",
-        number=8,
-        type_=FieldDescriptor.TYPE_MESSAGE,
-        type_name=".featurepb.Feature",
-    )
-    _add_field(
-        feature,
-        name="Numbers",
-        number=9,
-        type_=FieldDescriptor.TYPE_INT32,
-        label=FieldDescriptor.LABEL_REPEATED,
-    )
-    _add_field(
-        feature,
-        name="BytesByName",
-        number=10,
-        type_=FieldDescriptor.TYPE_MESSAGE,
-        label=FieldDescriptor.LABEL_REPEATED,
-        type_name=".featurepb.Feature.BytesByNameEntry",
-    )
-
-    pool = descriptor_pool.DescriptorPool()
-    pool.Add(file_proto)
-    descriptor = pool.FindMessageTypeByName("featurepb.Feature")
-    return message_factory.GetMessageClass(descriptor)
+    assert type(restored) is Event
+    assert type(restored.session) is Session
+    assert restored == event
 
 
 def test_generated_sliver_models_use_snake_case_and_protobuf_aliases() -> None:
@@ -212,7 +82,7 @@ def test_generated_models_validate_protobuf_integer_ranges() -> None:
         models.commonpb.Process(pid=2**31)
 
 
-def test_public_registry_and_lookup_only_expose_pydantic_types() -> None:
+def test_public_registry_and_lookup_only_expose_concrete_pydantic_types() -> None:
     model_class = models.commonpb.File
 
     assert MODEL_REGISTRY["commonpb.File"] is model_class
@@ -220,6 +90,7 @@ def test_public_registry_and_lookup_only_expose_pydantic_types() -> None:
     assert get_pydantic_model("File") is model_class
     assert get_pydantic_model(model_class) is model_class
     assert all(issubclass(value, ProtobufModel) for value in MODEL_REGISTRY.values())
+    assert not hasattr(models, "PACKAGE_NAMESPACES")
 
 
 @pytest.mark.parametrize(
@@ -233,65 +104,77 @@ def test_public_model_lookup_rejects_wire_types(wire_type: object) -> None:
     assert _get_pydantic_model(wire_type) is models.commonpb.File
 
 
-def test_dynamic_descriptor_round_trip_covers_composite_field_kinds() -> None:
-    message_type = _feature_message_type()
-    message = message_type(
-        PayloadData=b"\x00binary\xff",
-        State=1,
-        OptionalCount=0,
-        TextValue="selected",
-        Numbers=[1, 2, 3],
-        BytesByName={"raw": b"\x01\x02"},
+def test_concrete_models_round_trip_maps_repeated_and_nested_messages() -> None:
+    message = sliver_pb2.ExecuteReq(
+        Path="/bin/sh",
+        Args=["-c", "whoami"],
+        Env={"LANG": "C", "TERM": "xterm"},
+        Request=common_pb2.Request(SessionID="session-id"),
     )
-    message.ChildItems.add(ValueText="first")
-    message.ChildrenByName["primary"].ValueText = "mapped"
-    message.Next.SetInParent()
 
-    model_class = _get_pydantic_model(message_type.DESCRIPTOR)
     model = _protobuf_to_pydantic(message)
 
-    assert isinstance(model, model_class)
-    assert isinstance(model, ProtobufModel)
-    assert model.payload_data == b"\x00binary\xff"
-    assert model.child_items[0].value_text == "first"
-    assert model.children_by_name["primary"].value_text == "mapped"
-    assert isinstance(model.state, ProtobufEnum)
-    assert model.state.name == "STATE_RUNNING"
-    assert model.optional_count == 0
-    assert "optional_count" in model.model_fields_set
-    assert model.text_value == "selected"
-    assert model.child_value is None
-    assert model.next is not None
-    assert model.next.model_fields_set == set()
-    assert model.numbers == [1, 2, 3]
-    assert model.bytes_by_name == {"raw": b"\x01\x02"}
+    assert isinstance(model, models.sliverpb.ExecuteReq)
+    assert model.args == ["-c", "whoami"]
+    assert model.env == {"LANG": "C", "TERM": "xterm"}
+    assert isinstance(model.request, models.commonpb.Request)
+    assert model.request.session_id == "session-id"
     assert _model_to_protobuf(model) == message
 
-    assert MODEL_REGISTRY["featurepb.Feature"] is model_class
-    assert models.PACKAGE_NAMESPACES["featurepb"].Feature is model_class
+
+def test_concrete_recursive_models_round_trip_without_dynamic_fallbacks() -> None:
+    message = client_pb2.PivotGraphEntry(
+        PeerID=1,
+        Name="root",
+        Children=[client_pb2.PivotGraphEntry(PeerID=2, Name="child")],
+    )
+
+    model = _protobuf_to_pydantic(message)
+
+    assert isinstance(model, models.clientpb.PivotGraphEntry)
+    assert isinstance(model.children[0], models.clientpb.PivotGraphEntry)
+    assert model.children[0].name == "child"
+    assert _model_to_protobuf(model) == message
 
 
-def test_presence_oneof_and_open_enum_validation() -> None:
-    message_type = _feature_message_type()
-    model_class = _get_pydantic_model(message_type.DESCRIPTOR)
+def test_presence_and_open_enum_values_use_real_generated_types() -> None:
+    absent = models.clientpb.AIConversationMessage()
+    present_default = models.clientpb.AIConversationMessage(include_in_context=False)
 
-    empty = model_class()
-    assert empty.optional_count is None
-    assert empty.next is None
-    empty_message = _model_to_protobuf(empty)
-    assert not empty_message.HasField("OptionalCount")
-    assert not empty_message.HasField("Next")
+    assert absent.include_in_context is None
+    assert not _model_to_protobuf(absent).HasField("IncludeInContext")
+    assert _model_to_protobuf(present_default).HasField("IncludeInContext")
 
-    present_default = model_class(OptionalCount=0)
-    assert _model_to_protobuf(present_default).HasField("OptionalCount")
+    wire = client_pb2.ImplantConfig(Format=31337)
+    config = _protobuf_to_pydantic(wire)
+    assert isinstance(config, models.clientpb.ImplantConfig)
+    assert isinstance(config.format, ProtobufEnum)
+    assert config.format.name == "UNRECOGNIZED_31337"
+    assert _model_to_protobuf(config).Format == 31337
 
-    unknown_enum = model_class(State=31337)
-    assert isinstance(unknown_enum.state, ProtobufEnum)
-    assert unknown_enum.state.name == "UNRECOGNIZED_31337"
-    assert _model_to_protobuf(unknown_enum).State == 31337
 
-    with pytest.raises(ValidationError, match="oneof"):
-        model_class(TextValue="text", ChildValue={"ValueText": "child"})
+def test_reserved_model_names_have_stable_python_fields_and_wire_aliases() -> None:
+    request = models.commonpb.Request(Async=True)
+    registration = models.sliverpb.BeaconRegister(
+        Register=models.sliverpb.Register(name="implant")
+    )
+
+    assert request.async_ is True
+    assert registration.register_ is not None
+    assert registration.register_.name == "implant"
+    assert _model_to_protobuf(request).Async is True
+    assert _model_to_protobuf(registration).Register.Name == "implant"
+
+
+def test_nested_message_is_a_concrete_class_on_its_parent() -> None:
+    address = models.sliverpb.SockTabEntry.SockAddr(ip="127.0.0.1", port=4444)
+    entry = models.sliverpb.SockTabEntry(local_addr=address)
+
+    assert isinstance(address, ProtobufModel)
+    assert type(address).__module__ == "sliver.models.sliverpb"
+    assert entry.local_addr is not None
+    assert entry.local_addr.port == 4444
+    assert _model_to_protobuf(entry).LocalAddr.Port == 4444
 
 
 def test_recursive_wire_decoder_preserves_ordinary_container_shapes() -> None:
@@ -322,5 +205,5 @@ def test_wire_conversion_is_private_and_rejects_raw_messages_in_model_encoder() 
     assert not hasattr(type(model), "__protobuf_class__")
     assert not hasattr(type(model), "__protobuf_descriptor__")
 
-    with pytest.raises(TypeError, match="not bound to a protobuf descriptor"):
+    with pytest.raises(TypeError, match="no internal wire binding"):
         _model_to_protobuf(common_pb2.File())  # type: ignore[arg-type]

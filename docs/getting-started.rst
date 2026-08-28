@@ -77,17 +77,15 @@ configuration, then await ``connect()`` before making API calls:
 Pydantic models
 ---------------
 
-Public request and response objects are Pydantic models generated from the
-bundled Sliver descriptors. Each type lives at
-``sliver.models.<package>.<Type>`` and exposes ``snake_case`` fields. Import the
-``models`` object itself; ``clientpb``, ``commonpb``, and ``sliverpb`` are
-runtime attribute namespaces, not importable Python submodules:
+Public request and response objects are concrete Pydantic classes generated
+from the bundled Sliver descriptors. Each class lives in an importable module
+under ``sliver.models`` and exposes ``snake_case`` fields:
 
 .. code-block:: python
 
-    from sliver import models
+    from sliver.models.clientpb import RenameReq
 
-    request = models.clientpb.RenameReq(
+    request = RenameReq(
         session_id="session-id",
         name="web-server",
     )
@@ -98,14 +96,16 @@ and writes the ``snake_case`` attribute:
 
 .. code-block:: python
 
-    request = models.clientpb.RenameReq.model_validate(
+    from sliver.models.clientpb import RenameReq
+
+    request = RenameReq.model_validate(
         {"SessionID": "session-id", "Name": "web-server"}
     )
     assert request.session_id == "session-id"
 
 Every public client and interaction method accepts and returns Pydantic models,
 ordinary Python containers, or primitive values. The generated transport layer
-is private. See :doc:`models` for model namespaces, validation, serialization,
+is private. See :doc:`models` for model modules, validation, serialization,
 nested types, and field-presence behavior.
 
 Low-level Pydantic RPC access
@@ -117,7 +117,9 @@ request type and returns the Pydantic response type:
 
 .. code-block:: python
 
-    request = models.clientpb.RenameReq(
+    from sliver.models.clientpb import RenameReq
+
+    request = RenameReq(
         session_id="session-id",
         name="web-server",
     )
@@ -129,19 +131,19 @@ The property is unavailable before ``await client.connect()`` and after
 Nested models and enums
 -----------------------
 
-Construct nested messages and generated enums with the same namespace. For
+Import generated models and enums from their concrete modules. For
 example, :meth:`sliver.SliverClient.generate_implant` accepts a Pydantic
 ``ImplantConfig`` and returns a Pydantic ``Generate`` model:
 
 .. code-block:: python
 
-    from sliver import models
+    from sliver.models.clientpb import ImplantC2, ImplantConfig, OutputFormat
 
-    implant_config = models.clientpb.ImplantConfig(
+    implant_config = ImplantConfig(
         goos="linux",
         goarch="amd64",
-        format=models.clientpb.OutputFormat.EXECUTABLE,
-        c2=[models.clientpb.ImplantC2(url="mtls://127.0.0.1:8888")],
+        format=OutputFormat.EXECUTABLE,
+        c2=[ImplantC2(url="mtls://127.0.0.1:8888")],
         include_mtls=True,
     )
     generated = await client.generate_implant(implant_config)
@@ -257,17 +259,30 @@ For example, automatically interact with newly connected sessions:
     from pathlib import Path
 
     from sliver import SliverClient, SliverClientConfig
+    from sliver.models.clientpb import Event
 
     CONFIG_PATH = Path.home() / ".sliver-client" / "configs" / "default.cfg"
 
 
-    async def main():
+    async def receive(client: SliverClient) -> list[Event]:
+        events: list[Event] = []
+        stream = client.on("session-connected")
+        try:
+            async for event in stream:
+                events.append(event)
+                break
+        finally:
+            await stream.aclose()
+        return events
+
+
+    async def main() -> None:
         config = SliverClientConfig.parse_config_file(CONFIG_PATH)
         client = SliverClient(config)
         try:
             await client.connect()
 
-            async for event in client.on("session-connected"):
+            for event in await receive(client):
                 if event.session is None:
                     continue
                 print(f"Interacting with session {event.session.id}")

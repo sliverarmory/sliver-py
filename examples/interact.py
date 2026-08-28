@@ -8,12 +8,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
-from sliver import SliverClient, models
+from sliver import SliverClient
+from sliver.models.clientpb import Beacon, Session
+from sliver.models.sliverpb import Execute, Ls, Ping, Pwd
 
 from .common import connected_client, require_success
 
 TargetKind = Literal["session", "beacon"]
-Target = models.clientpb.Session | models.clientpb.Beacon
+Target = Session | Beacon
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,10 +23,10 @@ class InteractionResult:
     """Results from the commands demonstrated by this example."""
 
     target: Target
-    ping: models.sliverpb.Ping
-    pwd: models.sliverpb.Pwd
-    listing: models.sliverpb.Ls
-    executed: models.sliverpb.Execute
+    ping: Ping
+    pwd: Pwd
+    listing: Ls
+    executed: Execute
 
 
 def _default_command(target_os: str) -> tuple[str, list[str]]:

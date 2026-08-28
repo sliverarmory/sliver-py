@@ -9,7 +9,16 @@ import pytest
 from sliver import models
 from sliver._pb.clientpb import client_pb2
 from sliver._pb.commonpb import common_pb2
-from sliver._rpc import _ConvertedCall, _ConvertedMultiCallable
+from sliver._rpc import (
+    StreamStreamCall,
+    StreamStreamMultiCallable,
+    StreamUnaryCall,
+    StreamUnaryMultiCallable,
+    UnaryStreamCall,
+    UnaryStreamMultiCallable,
+    UnaryUnaryCall,
+    UnaryUnaryMultiCallable,
+)
 
 
 class _RawCall:
@@ -90,27 +99,12 @@ class _RecordingCallable:
         return self.call
 
 
-def _rpc(
-    raw_callable: _RecordingCallable,
-    request_type: type[models.ProtobufModel],
-    response_type: type[models.ProtobufModel],
-    *,
-    client_streaming: bool = False,
-) -> _ConvertedMultiCallable:
-    return _ConvertedMultiCallable(
-        raw_callable,
-        request_type,
-        response_type,
-        client_streaming=client_streaming,
-    )
-
-
 async def test_unary_unary_converts_request_response_and_call_options() -> None:
-    raw_call = _RawCall(
-        unary_response=client_pb2.Version(Major=1, Minor=2, Patch=3)
-    )
+    raw_call = _RawCall(unary_response=client_pb2.Version(Major=1, Minor=2, Patch=3))
     raw_callable = _RecordingCallable(raw_call)
-    rpc = _rpc(raw_callable, models.commonpb.Empty, models.clientpb.Version)
+    rpc = UnaryUnaryMultiCallable(
+        raw_callable, models.commonpb.Empty, models.clientpb.Version
+    )
 
     response = await rpc(
         models.commonpb.Empty(),
@@ -125,6 +119,7 @@ async def test_unary_unary_converts_request_response_and_call_options() -> None:
     assert raw_callable.kwargs["wait_for_ready"] is True
     assert isinstance(response, models.clientpb.Version)
     assert (response.major, response.minor, response.patch) == (1, 2, 3)
+    assert isinstance(rpc(models.commonpb.Empty()), UnaryUnaryCall)
 
 
 async def test_unary_stream_converts_iteration_and_read_responses() -> None:
@@ -135,7 +130,9 @@ async def test_unary_stream_converts_iteration_and_read_responses() -> None:
         ]
     )
     raw_callable = _RecordingCallable(raw_call)
-    rpc = _rpc(raw_callable, models.commonpb.Empty, models.clientpb.Event)
+    rpc = UnaryStreamMultiCallable(
+        raw_callable, models.commonpb.Empty, models.clientpb.Event
+    )
 
     converted_call = rpc(models.commonpb.Empty())
     responses = [response async for response in converted_call]
@@ -144,10 +141,8 @@ async def test_unary_stream_converts_iteration_and_read_responses() -> None:
     assert all(isinstance(response, models.clientpb.Event) for response in responses)
     assert [response.event_type for response in responses] == ["first", "second"]
 
-    read_call = _RawCall(
-        stream_responses=[client_pb2.Event(EventType="read")]
-    )
-    converted_read_call = _rpc(
+    read_call = _RawCall(stream_responses=[client_pb2.Event(EventType="read")])
+    converted_read_call = UnaryStreamMultiCallable(
         _RecordingCallable(read_call),
         models.commonpb.Empty,
         models.clientpb.Event,
@@ -157,16 +152,16 @@ async def test_unary_stream_converts_iteration_and_read_responses() -> None:
     assert isinstance(response, models.clientpb.Event)
     assert response.event_type == "read"
     assert await converted_read_call.read() is grpc.aio.EOF
+    assert isinstance(converted_read_call, UnaryStreamCall)
 
 
 async def test_stream_unary_converts_sync_and_async_request_iterators() -> None:
     raw_call = _RawCall(unary_response=common_pb2.Empty())
     raw_callable = _RecordingCallable(raw_call)
-    rpc = _rpc(
+    rpc = StreamUnaryMultiCallable(
         raw_callable,
         models.clientpb.ClientLogData,
         models.commonpb.Empty,
-        client_streaming=True,
     )
     requests: Iterator[models.clientpb.ClientLogData] = iter(
         [
@@ -191,14 +186,11 @@ async def test_stream_unary_converts_sync_and_async_request_iterators() -> None:
     async def async_requests() -> AsyncIterator[models.clientpb.ClientLogData]:
         yield models.clientpb.ClientLogData(stream="stdout", data=b"async")
 
-    async_raw_callable = _RecordingCallable(
-        _RawCall(unary_response=common_pb2.Empty())
-    )
-    async_rpc = _rpc(
+    async_raw_callable = _RecordingCallable(_RawCall(unary_response=common_pb2.Empty()))
+    async_rpc = StreamUnaryMultiCallable(
         async_raw_callable,
         models.clientpb.ClientLogData,
         models.commonpb.Empty,
-        client_streaming=True,
     )
 
     async_response_call = async_rpc(async_requests())
@@ -209,28 +201,28 @@ async def test_stream_unary_converts_sync_and_async_request_iterators() -> None:
     assert isinstance(async_converted[0], client_pb2.ClientLogData)
     assert async_converted[0].Data == b"async"
     assert isinstance(async_response, models.commonpb.Empty)
+    assert isinstance(async_response_call, StreamUnaryCall)
 
 
 async def test_stream_stream_converts_write_read_and_callback_boundaries() -> None:
-    raw_call = _RawCall(
-        stream_responses=[client_pb2.Event(EventType="bidirectional")]
-    )
+    raw_call = _RawCall(stream_responses=[client_pb2.Event(EventType="bidirectional")])
     raw_callable = _RecordingCallable(raw_call)
-    rpc = _rpc(
+    rpc = StreamStreamMultiCallable(
         raw_callable,
         models.clientpb.ClientLogData,
         models.clientpb.Event,
-        client_streaming=True,
     )
 
     call = rpc()
-    assert isinstance(call, _ConvertedCall)
+    assert isinstance(call, StreamStreamCall)
     assert raw_callable.request is None
 
     await call.write(models.clientpb.ClientLogData(stream="stdout", data=b"data"))
     response = await call.read()
     await call.done_writing()
-    callbacks: list[_ConvertedCall] = []
+    callbacks: list[
+        StreamStreamCall[models.clientpb.ClientLogData, models.clientpb.Event]
+    ] = []
     call.add_done_callback(callbacks.append)
 
     assert len(raw_call.writes) == 1
@@ -255,7 +247,7 @@ async def test_stream_stream_converts_write_read_and_callback_boundaries() -> No
 
 
 async def test_rpc_boundary_rejects_raw_or_wrong_request_types() -> None:
-    unary_rpc = _rpc(
+    unary_rpc = UnaryUnaryMultiCallable(
         _RecordingCallable(_RawCall(unary_response=common_pb2.Empty())),
         models.commonpb.Empty,
         models.commonpb.Empty,
@@ -263,15 +255,14 @@ async def test_rpc_boundary_rejects_raw_or_wrong_request_types() -> None:
 
     with pytest.raises(TypeError, match="RPC request must be Empty"):
         unary_rpc(common_pb2.Empty())  # type: ignore[arg-type]
-    with pytest.raises(TypeError, match="does not accept a request stream"):
+    with pytest.raises(TypeError, match="RPC request must be Empty"):
         unary_rpc(iter([models.commonpb.Empty()]))
 
     raw_callable = _RecordingCallable(_RawCall(unary_response=common_pb2.Empty()))
-    streaming_rpc = _rpc(
+    streaming_rpc = StreamUnaryMultiCallable(
         raw_callable,
         models.clientpb.ClientLogData,
         models.commonpb.Empty,
-        client_streaming=True,
     )
     streamed_call = streaming_rpc(iter([client_pb2.ClientLogData()]))  # type: ignore[list-item]
     with pytest.raises(TypeError, match="RPC request must be ClientLogData"):
@@ -285,11 +276,11 @@ async def test_rpc_boundary_rejects_raw_or_wrong_request_types() -> None:
         streaming_rpc(models.clientpb.ClientLogData())
 
     # gRPC-style stream conversion is intentionally lazy.
-    assert isinstance(streamed_call, _ConvertedCall)
+    assert isinstance(streamed_call, StreamUnaryCall)
 
 
 async def test_rpc_boundary_never_returns_an_unexpected_wire_model() -> None:
-    rpc = _rpc(
+    rpc = UnaryUnaryMultiCallable(
         _RecordingCallable(_RawCall(unary_response=common_pb2.Empty())),
         models.commonpb.Empty,
         models.clientpb.Version,

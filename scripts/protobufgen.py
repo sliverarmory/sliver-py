@@ -9,6 +9,8 @@ from importlib.resources import files
 from pathlib import Path
 
 from grpc_tools import protoc
+from pydanticgen import generate_models
+from rpcgen import generate_rpc_surface
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PROTO_DIR = ROOT_DIR / "sliver" / "protobuf"
@@ -97,7 +99,12 @@ def main() -> None:
         _rewrite_package_imports(candidate_dir)
         _replace_generated_tree(candidate_dir)
 
-    print(f"Generated Python protobuf and gRPC bindings in {OUT_DIR}")
+    if not generate_models():
+        raise RuntimeError("Pydantic model generation failed")
+    if not generate_rpc_surface():
+        raise RuntimeError("Pydantic RPC surface generation failed")
+
+    print(f"Generated private Python protobuf and gRPC bindings in {OUT_DIR}")
 
 
 if __name__ == "__main__":

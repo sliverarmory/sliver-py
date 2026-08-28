@@ -7,7 +7,7 @@ implementations. Public request and response values are Pydantic models.
 
 Call ``await client.connect()`` before using high-level methods or
 ``client.pydantic_stub``. ``connect()`` returns a
-``models.clientpb.Version`` model. Always release the gRPC channel with
+``sliver.models.clientpb.Version`` model. Always release the gRPC channel with
 ``await client.close()``; the Pydantic-only stub becomes unavailable again
 after closing.
 

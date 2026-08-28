@@ -14,7 +14,8 @@ or remove the remote beacon. Shared command signatures are documented under
 :doc:`commands`.
 
 The ``beacon`` property returns a defensive copy of the complete
-``models.clientpb.Beacon`` model captured when the interaction was created.
+``sliver.models.clientpb.Beacon`` model captured when the interaction was
+created.
 Convenience properties expose its commonly used scalar fields: ``beacon_id``,
 ``name``, ``hostname``, ``uuid``, ``username``, ``uid``, ``gid``, ``os``,
 ``arch``, ``transport``, ``remote_address``, ``pid``, ``filename``,

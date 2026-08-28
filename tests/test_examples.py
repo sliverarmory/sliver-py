@@ -11,7 +11,16 @@ from examples.generate_implant import (
 )
 from examples.temporary_listener import run_temporary_listener
 from examples.watch_events import collect_events
-from sliver import models
+from sliver.models.clientpb import (
+    Event,
+    Generate,
+    ImplantC2,
+    ImplantConfig,
+    KillJob,
+    ListenerJob,
+    OutputFormat,
+)
+from sliver.models.commonpb import File
 
 
 def test_host_target_uses_sliver_platform_names(
@@ -31,18 +40,16 @@ def test_implant_config_uses_public_pydantic_models() -> None:
         is_beacon=True,
     )
 
-    assert isinstance(config, models.clientpb.ImplantConfig)
+    assert isinstance(config, ImplantConfig)
     assert config.is_beacon
-    assert config.format is models.clientpb.OutputFormat.EXECUTABLE
-    assert config.c2 == [
-        models.clientpb.ImplantC2(priority=0, url="mtls://127.0.0.1:8888")
-    ]
+    assert config.format is OutputFormat.EXECUTABLE
+    assert config.c2 == [ImplantC2(priority=0, url="mtls://127.0.0.1:8888")]
 
 
 def test_generated_implant_is_saved_exclusively(tmp_path: Path) -> None:
-    generated = models.clientpb.Generate(
+    generated = Generate(
         implant_name="EXAMPLE",
-        file=models.commonpb.File(name="example", data=b"implant"),
+        file=File(name="example", data=b"implant"),
     )
     destination = tmp_path / "nested" / "example"
 
@@ -61,7 +68,7 @@ class _EventClient:
         return self._events()
 
     async def _events(self):
-        yield models.clientpb.Event(event_type="job-started")
+        yield Event(event_type="job-started")
 
 
 async def test_event_example_accepts_one_event_type_as_a_string() -> None:
@@ -75,15 +82,15 @@ async def test_event_example_accepts_one_event_type_as_a_string() -> None:
     )
 
     assert client.selected == ["job-started"]
-    assert events == [models.clientpb.Event(event_type="job-started")]
+    assert events == [Event(event_type="job-started")]
 
 
 class _ListenerClient:
     async def start_mtls_listener(self, **_kwargs):
-        return models.clientpb.ListenerJob(job_id=7)
+        return ListenerJob(job_id=7)
 
     async def kill_job(self, job_id: int, **_kwargs):
-        return models.clientpb.KillJob(id=job_id, success=False)
+        return KillJob(id=job_id, success=False)
 
 
 async def test_temporary_listener_reports_cleanup_failure() -> None:

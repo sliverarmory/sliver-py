@@ -7,7 +7,8 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sliver import SliverClient, models
+from sliver import SliverClient
+from sliver.models.clientpb import KillJob, ListenerJob
 
 from .common import connected_client
 
@@ -16,8 +17,8 @@ from .common import connected_client
 class TemporaryListenerResult:
     """The public models returned while starting and stopping the listener."""
 
-    started: models.clientpb.ListenerJob
-    stopped: models.clientpb.KillJob
+    started: ListenerJob
+    stopped: KillJob
 
 
 async def run_temporary_listener(

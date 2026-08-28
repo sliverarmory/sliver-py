@@ -8,44 +8,45 @@ generated from the Sliver descriptors shipped at the exact submodule commit
 pinned by this repository, while generated transport messages remain private
 implementation details.
 
-Model namespaces
-----------------
+Model modules
+-------------
 
-Every top-level message and enum is available as
-``sliver.models.<package>.<Type>``. The three primary namespaces are:
+Every top-level message and enum is a concrete class in one of three importable
+Python modules:
 
 * ``sliver.models.clientpb`` for server and operator-client models;
 * ``sliver.models.commonpb`` for models shared across the API; and
 * ``sliver.models.sliverpb`` for implant command and result models.
 
-These are read-only runtime attribute namespaces. Import the ``models`` object
-through ``from sliver import models`` rather than importing the namespace names
-as Python modules. Nested messages and enums remain attributes of their
-containing model, for example ``models.sliverpb.SockTabEntry.SockAddr``.
-Synthetic map-entry messages become normal Python dictionaries and are not
-published as separate model classes.
+Import classes directly when writing annotations or constructing values. This
+gives static type checkers the real class definition instead of an untyped
+dynamic lookup. Nested messages and enums remain attributes of their containing
+model, for example ``SockTabEntry.SockAddr``. Synthetic map-entry messages
+become normal Python dictionaries and are not published as separate model
+classes.
 
 Construct top-level and nested models directly:
 
 .. code-block:: python
 
-    from sliver import models
+    from sliver.models.clientpb import RenameReq
+    from sliver.models.sliverpb import FileInfo, Ls, SockTabEntry
 
-    request = models.clientpb.RenameReq(
+    request = RenameReq(
         session_id="session-id",
         name="web-server",
     )
-    listing = models.sliverpb.Ls(
+    listing = Ls(
         path="/tmp",
         files=[
-            models.sliverpb.FileInfo(
+            FileInfo(
                 name="payload.bin",
                 is_dir=False,
                 size=4096,
             )
         ],
     )
-    address = models.sliverpb.SockTabEntry.SockAddr(
+    address = SockTabEntry.SockAddr(
         ip="127.0.0.1",
         port=8888,
     )
@@ -58,7 +59,7 @@ inherits from Pydantic's ``BaseModel``. Standard operations such as
 Enums and structured arguments
 ------------------------------
 
-Generated enums live in the same namespaces and inherit from
+Generated enums live in the same modules and inherit from
 :class:`sliver.models.ProtobufEnum`, an ``IntEnum``. Use an enum member or its
 integer value when validating an enum field; enum-name strings are not
 accepted. Structured client and interactive arguments use generated model or
@@ -69,11 +70,13 @@ For example, :meth:`sliver.SliverClient.generate_implant` accepts a Pydantic
 
 .. code-block:: python
 
-    config = models.clientpb.ImplantConfig(
+    from sliver.models.clientpb import ImplantC2, ImplantConfig, OutputFormat
+
+    config = ImplantConfig(
         goos="linux",
         goarch="amd64",
-        format=models.clientpb.OutputFormat.EXECUTABLE,
-        c2=[models.clientpb.ImplantC2(url="mtls://127.0.0.1:8888")],
+        format=OutputFormat.EXECUTABLE,
+        c2=[ImplantC2(url="mtls://127.0.0.1:8888")],
         include_mtls=True,
     )
     generated = await client.generate_implant(config)
@@ -95,7 +98,9 @@ Use Python spelling when constructing or reading a model:
 
 .. code-block:: python
 
-    session = models.clientpb.Session(
+    from sliver.models.clientpb import Session
+
+    session = Session(
         id="session-id",
         name="web-server",
         remote_address="192.0.2.10:31337",
@@ -107,7 +112,9 @@ aliases. They are input aliases, not Python attributes:
 
 .. code-block:: python
 
-    request = models.clientpb.RenameReq.model_validate(
+    from sliver.models.clientpb import RenameReq
+
+    request = RenameReq.model_validate(
         {"SessionID": "session-id", "Name": "web-server"}
     )
     assert request.session_id == "session-id"
@@ -134,7 +141,9 @@ integers:
 
     import json
 
-    artifact = models.commonpb.File(name="payload.bin", data=b"\x00\xff")
+    from sliver.models.commonpb import File
+
+    artifact = File(name="payload.bin", data=b"\x00\xff")
     assert artifact.model_dump()["data"] == b"\x00\xff"
     assert json.loads(artifact.model_dump_json())["data"] == "AP8="
 
@@ -159,7 +168,9 @@ Unknown fields are rejected, and assignment to an existing field is validated:
 
 .. code-block:: python
 
-    request = models.commonpb.Request(timeout=30)
+    from sliver.models.commonpb import Request
+
+    request = Request(timeout=30)
     request.timeout = 60
 
     # Raises a Pydantic validation error: timeout must remain an integer.
@@ -170,7 +181,9 @@ underscore. For example, construct Sliver's ``Async`` field as ``async_``:
 
 .. code-block:: python
 
-    routing = models.commonpb.Request(
+    from sliver.models.commonpb import Request
+
+    routing = Request(
         beacon_id="beacon-id",
         timeout=30,
         async_=True,
@@ -185,10 +198,11 @@ fully qualified name, a unique unqualified name, or an existing
 
 .. code-block:: python
 
-    from sliver import get_pydantic_model, models
+    from sliver import get_pydantic_model
+    from sliver.models.clientpb import Session
 
     session_type = get_pydantic_model("clientpb.Session")
-    assert session_type is models.clientpb.Session
+    assert session_type is Session
     assert get_pydantic_model(session_type) is session_type
 
 Ambiguous short names raise ``KeyError``; callers can resolve them with the
@@ -210,7 +224,9 @@ that RPC's Pydantic request model and returns its Pydantic response model:
 
 .. code-block:: python
 
-    request = models.clientpb.RenameReq(
+    from sliver.models.clientpb import RenameReq
+
+    request = RenameReq(
         session_id="session-id",
         name="web-server",
     )
@@ -225,10 +241,10 @@ Session and beacon model snapshots
 ----------------------------------
 
 An :class:`sliver.InteractiveSession` is constructed from a
-``models.clientpb.Session``. Its ``session`` property returns a defensive copy
-of that complete Pydantic model, and convenience properties expose common
-scalar fields. The interaction owns no separate channel; close its parent
-client when finished.
+``sliver.models.clientpb.Session``. Its ``session`` property returns a
+defensive copy of that complete Pydantic model, and convenience properties
+expose common scalar fields. The interaction owns no separate channel; close
+its parent client when finished.
 
 An :class:`sliver.InteractiveBeacon` similarly exposes a defensive copy through
 its ``beacon`` property. It also owns a local task-result watcher. Call

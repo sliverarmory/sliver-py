@@ -50,6 +50,7 @@ docs = [
     "sphinx-rtd-theme>=3.0,<4",
 ]
 lint = [
+    "mypy>=1.17,<2",
     "ruff>=0.12,<1",
 ]
 protobuf = [
@@ -86,6 +87,18 @@ extend-exclude = ["src/sliver/_pb"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+disallow_any_expr = true
+disallow_any_unimported = true
+follow_imports = "silent"
+warn_unreachable = true
+
+[[tool.mypy.overrides]]
+module = ["grpc.*"]
+ignore_missing_imports = true
 
 [tool.uv.build-backend]
 module-name = "sliver"

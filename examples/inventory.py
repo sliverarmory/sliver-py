@@ -7,7 +7,8 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from sliver import SliverClient, models
+from sliver import SliverClient
+from sliver.models.clientpb import Beacon, Job, Operator, Session, Version
 
 from .common import connected_client
 
@@ -16,11 +17,11 @@ from .common import connected_client
 class Inventory:
     """A point-in-time snapshot of common Sliver server resources."""
 
-    version: models.clientpb.Version
-    sessions: list[models.clientpb.Session]
-    beacons: list[models.clientpb.Beacon]
-    jobs: list[models.clientpb.Job]
-    operators: list[models.clientpb.Operator]
+    version: Version
+    sessions: list[Session]
+    beacons: list[Beacon]
+    jobs: list[Job]
+    operators: list[Operator]
 
 
 async def collect_inventory(

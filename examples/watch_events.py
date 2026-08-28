@@ -6,7 +6,8 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 
-from sliver import SliverClient, models
+from sliver import SliverClient
+from sliver.models.clientpb import Event
 
 from .common import connected_client
 
@@ -17,7 +18,7 @@ async def collect_events(
     *,
     count: int = 1,
     timeout: float = 60.0,
-) -> list[models.clientpb.Event]:
+) -> list[Event]:
     """Collect at most ``count`` matching events within an overall timeout."""
 
     if count < 1:
@@ -28,8 +29,8 @@ async def collect_events(
     selected = [event_types] if isinstance(event_types, str) else list(event_types)
     stream = client.on(selected) if selected else client.events()
 
-    async def receive() -> list[models.clientpb.Event]:
-        events: list[models.clientpb.Event] = []
+    async def receive() -> list[Event]:
+        events: list[Event] = []
         iterator = stream.__aiter__()
         events.append(await anext(iterator))
         if len(events) == count:

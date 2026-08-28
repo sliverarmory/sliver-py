@@ -91,12 +91,26 @@ class BaseClient:
         ]
 
     @property
-    def raw_stub(self) -> SliverRPCStub:
-        """Return the generated protobuf stub for unsupported low-level RPCs."""
+    def pydantic_stub(self) -> PydanticSliverRPCStub:
+        """Return the model-converting stub for unsupported low-level RPCs.
 
+        Requests accept descriptor-generated Pydantic models and responses are
+        converted back to Pydantic models. The stub is available only while the
+        client is connected.
+        """
         if self._stub is None:
             raise RuntimeError("client is not connected")
-        return self._stub.raw
+        return self._stub
+
+    @property
+    def raw_stub(self) -> SliverRPCStub:
+        """Return the generated protobuf stub for unsupported low-level RPCs.
+
+        The raw stub does not perform Pydantic conversion and is available only
+        while the client is connected.
+        """
+
+        return self.pydantic_stub.raw
 
 
 class SliverClient(BaseClient):
@@ -145,7 +159,7 @@ class SliverClient(BaseClient):
         :type beacon_id: str
         :param timeout: gRPC timeout, defaults to 60 seconds
         :return: An interactive beacon
-        :rtype: Optional[AsyncInteractiveBeacon]
+        :rtype: InteractiveBeacon | None
         """
         beacon = await self.beacon_by_id(beacon_id, timeout)
         if beacon:
@@ -300,9 +314,11 @@ class SliverClient(BaseClient):
         await self._stub.Rename(rename_req, timeout=timeout)
 
     async def kill_beacon(self, beacon_id: str, timeout=TIMEOUT) -> None:
-        """Kill a beacon
+        """Remove a beacon record from the server.
 
-        :param beacon_id: Numeric beacon ID to remove
+        This does not terminate a running beacon process.
+
+        :param beacon_id: Beacon ID to remove
         :type beacon_id: str
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional

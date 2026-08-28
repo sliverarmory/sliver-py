@@ -1,9 +1,11 @@
 Getting started
 ===============
 
-SliverPy connects to a Sliver server's multiplayer gRPC endpoint. Download the
-`latest Sliver server release <https://github.com/BishopFox/sliver/releases/latest>`_
-or build the current ``master`` branch used by this version of SliverPy.
+SliverPy connects to a Sliver server's multiplayer gRPC endpoint. The v0.1 API
+is generated from the Sliver protobuf definitions at the submodule commit
+pinned by this release. For strict compatibility, build the server from that
+commit rather than assuming a later Sliver release or ``master`` revision has
+the same API.
 
 Create an operator configuration
 --------------------------------
@@ -55,12 +57,18 @@ configuration, then await ``connect()`` before making API calls:
     async def main():
         config = SliverClientConfig.parse_config_file(CONFIG_PATH)
         client = SliverClient(config)
-        version = await client.connect()
-        print(f"Connected to Sliver {version.major}.{version.minor}.{version.patch}")
+        try:
+            version = await client.connect()
+            print(
+                f"Connected to Sliver "
+                f"{version.major}.{version.minor}.{version.patch}"
+            )
 
-        sessions = await client.sessions()
-        for session in sessions:
-            print(session.id, session.name, session.remote_address)
+            sessions = await client.sessions()
+            for session in sessions:
+                print(session.id, session.name, session.remote_address)
+        finally:
+            await client.close()
 
 
     if __name__ == "__main__":
@@ -71,7 +79,9 @@ Pydantic models
 
 Public request and response objects are Pydantic models generated from the
 bundled protobuf descriptors. Each type lives at
-``sliver.models.<package>.<Message>`` and exposes ``snake_case`` fields:
+``sliver.models.<package>.<Type>`` and exposes ``snake_case`` fields. Import the
+``models`` object itself; ``clientpb``, ``commonpb``, and ``sliverpb`` are
+runtime attribute namespaces, not importable Python submodules:
 
 .. code-block:: python
 
@@ -105,6 +115,29 @@ convert protobuf responses back to models. Use ``to_protobuf()`` and
 See :doc:`models` for model namespaces, serialization, automatic RPC-boundary
 conversion, and the raw protobuf escape hatch.
 
+Nested models and enums
+-----------------------
+
+Construct nested messages and generated enums with the same namespace. For
+example, :meth:`sliver.SliverClient.generate_implant` accepts a Pydantic
+``ImplantConfig`` and returns a Pydantic ``Generate`` model:
+
+.. code-block:: python
+
+    from sliver import models
+
+    implant_config = models.clientpb.ImplantConfig(
+        goos="linux",
+        goarch="amd64",
+        format=models.clientpb.OutputFormat.EXECUTABLE,
+        c2=[models.clientpb.ImplantC2(url="mtls://127.0.0.1:8888")],
+        include_mtls=True,
+    )
+    generated = await client.generate_implant(implant_config)
+    print(generated.implant_name)
+    if generated.file is not None:
+        print(generated.file.name, len(generated.file.data))
+
 Interactive sessions
 --------------------
 
@@ -132,7 +165,8 @@ Pass a session model's ``id`` to ``interact_session()`` to create an
         )
 
 The session model at ``sliver.models.clientpb.Session`` contains metadata about
-the connection. ``InteractiveSession`` performs commands against that session.
+the connection. ``InteractiveSession`` performs commands against that session
+and shares the client's channel, so closing the client releases its resources.
 
 Interactive beacons
 -------------------
@@ -152,14 +186,20 @@ asynchronous beacon task internally, so each command needs only one ``await``:
         print("Beacon disappeared")
         return
 
-    listing = await beacon.ls()
+    try:
+        listing = await beacon.ls()
 
-    print(f"Listing directory contents of {listing.path}")
-    for file_info in listing.files:
-        print(
-            f"{file_info.name} "
-            f"(dir={file_info.is_dir}, size={file_info.size})"
-        )
+        print(f"Listing directory contents of {listing.path}")
+        for file_info in listing.files:
+            print(
+                f"{file_info.name} "
+                f"(dir={file_info.is_dir}, size={file_info.size})"
+            )
+    finally:
+        await beacon.close()
+
+``InteractiveBeacon.close()`` stops the local task-result watcher and cancels
+pending local commands. It does not terminate or remove the remote beacon.
 
 Realtime events
 ---------------
@@ -205,16 +245,19 @@ For example, automatically interact with newly connected sessions:
     async def main():
         config = SliverClientConfig.parse_config_file(CONFIG_PATH)
         client = SliverClient(config)
-        await client.connect()
+        try:
+            await client.connect()
 
-        async for event in client.on("session-connected"):
-            if event.session is None:
-                continue
-            print(f"Interacting with session {event.session.id}")
-            session = await client.interact_session(event.session.id)
-            if session is not None:
-                result = await session.execute("whoami", [], output=True)
-                print(result)
+            async for event in client.on("session-connected"):
+                if event.session is None:
+                    continue
+                print(f"Interacting with session {event.session.id}")
+                session = await client.interact_session(event.session.id)
+                if session is not None:
+                    result = await session.execute("whoami", [], output=True)
+                    print(result)
+        finally:
+            await client.close()
 
 
     if __name__ == "__main__":

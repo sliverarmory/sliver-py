@@ -2,7 +2,7 @@
 
 SliverPy is an async Python client library for [Sliver](https://github.com/BishopFox/sliver). It automates operator interactions over Sliver's mutually authenticated gRPC API and exposes descriptor-generated [Pydantic](https://docs.pydantic.dev/) models instead of generated protobuf messages at the public API. [See the project documentation for more details](https://sliverpy.readthedocs.io/).
 
-The v0.1 API targets the current Sliver `master` protobuf definitions. Not every Sliver feature has a high-level convenience method yet; the Pydantic-aware RPC stub and raw generated gRPC stub are available for advanced use.
+The v0.1 API is generated from the Sliver protobuf definitions at the submodule commit pinned by this release. Not every Sliver feature has a high-level convenience method yet; public Pydantic-aware and raw generated gRPC stubs are available for advanced use.
 
 [![SliverPy](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml/badge.svg)](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml)
 [![Documentation Status](https://readthedocs.org/projects/sliverpy/badge/?version=latest)](https://sliverpy.readthedocs.io/en/latest/?badge=latest)
@@ -24,40 +24,57 @@ python -m pip install sliver-py
 
 #### Kali Linux / Fix OpenSSL Errors
 
-[Python's TLS implementation](https://docs.python.org/3/library/ssl.html) may exhibit platform specific behavoir, if you encounter OpenSSL connection errors you may need to re-install the gRPC Python library from source. This issue is known to affect recent versions of Kali Linux. To fix the issue use the following command to re-install gRPC from source, note depending on your distribution you may also need to install gcc (i.e. `build-essential`) and the development package for OpenSSL:
+[Python's TLS implementation](https://docs.python.org/3/library/ssl.html) may exhibit platform-specific behavior. If a pip-based installation encounters OpenSSL connection errors, reinstall gRPC Python from source. Depending on the distribution, this may also require GCC (for example, `build-essential`) and the OpenSSL development package:
 
-`GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True pip install --use-pep517 --force-reinstall grpcio`
+```console
+GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True python -m pip install --force-reinstall --no-binary grpcio grpcio
+```
 
 ## Examples
 
-For more examples and details please read the [project documentation](http://sliverpy.rtfd.io/).
+For more examples and details, read the [project documentation](https://sliverpy.rtfd.io/).
 
 #### Interact with Sessions
 
 ```python
 #!/usr/bin/env python3
 
-import os
 import asyncio
-from sliver import SliverClientConfig, SliverClient
+from pathlib import Path
 
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".sliver-client", "configs")
-DEFAULT_CONFIG = os.path.join(CONFIG_DIR, "default.cfg")
+from sliver import SliverClient, SliverClientConfig
 
-async def main():
+DEFAULT_CONFIG = Path.home() / ".sliver-client" / "configs" / "default.cfg"
+
+
+async def main() -> None:
     config = SliverClientConfig.parse_config_file(DEFAULT_CONFIG)
     client = SliverClient(config)
-    print('[*] Connected to server ...')
-    await client.connect()
-    sessions = await client.sessions()
-    print('[*] Sessions: %r' % sessions)
-    if len(sessions):
-        print(f'[*] Interacting with session {sessions[0].name!r}')
-        interact = await client.interact_session(sessions[0].id)
-        ls = await interact.ls()
-        print('[*] ls: %r' % ls)
+    try:
+        version = await client.connect()
+        print(
+            f"[*] Connected to Sliver "
+            f"{version.major}.{version.minor}.{version.patch}"
+        )
 
-if __name__ == '__main__':
+        sessions = await client.sessions()
+        if not sessions:
+            print("[*] No sessions")
+            return
+
+        print(f"[*] Interacting with session {sessions[0].name!r}")
+        interaction = await client.interact_session(sessions[0].id)
+        if interaction is None:
+            print("[*] Session disconnected")
+            return
+
+        listing = await interaction.ls()
+        print(f"[*] ls: {listing!r}")
+    finally:
+        await client.close()
+
+
+if __name__ == "__main__":
     asyncio.run(main())
 ```
 
@@ -66,36 +83,53 @@ if __name__ == '__main__':
 ```python
 #!/usr/bin/env python3
 
-import os
 import asyncio
-from sliver import SliverClientConfig, SliverClient
+from pathlib import Path
 
-CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".sliver-client", "configs")
-DEFAULT_CONFIG = os.path.join(CONFIG_DIR, "default.cfg")
+from sliver import SliverClient, SliverClientConfig
 
-async def main():
+DEFAULT_CONFIG = Path.home() / ".sliver-client" / "configs" / "default.cfg"
+
+
+async def main() -> None:
     config = SliverClientConfig.parse_config_file(DEFAULT_CONFIG)
     client = SliverClient(config)
-    print('[*] Connected to server ...')
-    await client.connect()
-    version = await client.version()
-    print('[*] Server version: %s' % version)
+    interaction = None
+    try:
+        version = await client.connect()
+        print(
+            f"[*] Connected to Sliver "
+            f"{version.major}.{version.minor}.{version.patch}"
+        )
 
-    beacons = await client.beacons()
-    print('[*] Beacons: %r' % beacons)
-    if len(beacons):
-        print(f'[*] Interacting with beacon: {beacons[0].name!r}')
-        interact = await client.interact_beacon(beacons[0].id)
-        ls = await interact.ls()
-        print('[*] ls: %r' % ls)
+        beacons = await client.beacons()
+        if not beacons:
+            print("[*] No beacons")
+            return
 
-if __name__ == '__main__':
+        print(f"[*] Interacting with beacon {beacons[0].name!r}")
+        interaction = await client.interact_beacon(beacons[0].id)
+        if interaction is None:
+            print("[*] Beacon disappeared")
+            return
+
+        listing = await interaction.ls()
+        print(f"[*] ls: {listing!r}")
+    finally:
+        if interaction is not None:
+            await interaction.close()
+        await client.close()
+
+
+if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+Closing an `InteractiveBeacon` stops its local task-result watcher; it does not terminate or remove the remote beacon.
+
 ## Pydantic models
 
-Every protobuf message has a Pydantic counterpart at `sliver.models.<package>.<Message>`. Model attributes and constructor arguments use Python `snake_case`; the original protobuf field names remain accepted as validation aliases for migration and wire-format interoperability.
+Every top-level protobuf message and enum has a Pydantic counterpart at `sliver.models.<package>.<Type>`. Nested messages and enums remain attributes of their containing model, such as `models.sliverpb.SockTabEntry.SockAddr`. Model attributes and constructor arguments use Python `snake_case`; original protobuf field and JSON names remain accepted as validation aliases for migration.
 
 ```python
 from sliver import models
@@ -115,15 +149,24 @@ assert same_request.session_id == request.session_id
 # Explicit conversion is available when integrating with protobuf-only code.
 protobuf_request = request.to_protobuf()
 request_again = models.clientpb.RenameReq.from_protobuf(protobuf_request)
+
+# Enum fields use generated IntEnum members, and nested messages use models.
+implant_config = models.clientpb.ImplantConfig(
+    goos="linux",
+    goarch="amd64",
+    format=models.clientpb.OutputFormat.EXECUTABLE,
+    c2=[models.clientpb.ImplantC2(url="mtls://127.0.0.1:8888")],
+    include_mtls=True,
+)
 ```
 
-After `SliverClient.connect()`, normal client and interactive calls convert model requests to protobuf and responses back to Pydantic automatically. Advanced callers can submit a model directly through the converted RPC stub:
+After `SliverClient.connect()`, normal client and interactive calls convert model requests to protobuf and responses back to Pydantic automatically. Advanced callers can submit a model directly through the public converted RPC stub:
 
 ```python
-await client._stub.Rename(request)
+await client.pydantic_stub.Rename(request)
 ```
 
-If exact generated protobuf behavior is required, use the explicit raw escape hatch. Raw RPCs require raw protobuf requests and return raw protobuf responses:
+If exact generated protobuf behavior is required, use the explicit raw escape hatch. Raw RPCs require raw protobuf requests and return raw protobuf responses. Both stubs are available only while the client is connected:
 
 ```python
 from sliver.pb.clientpb import client_pb2

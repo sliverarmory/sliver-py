@@ -33,7 +33,18 @@ async def test_client_close_releases_the_channel_and_is_idempotent() -> None:
     channel.close.assert_awaited_once_with()
     assert not client.is_connected()
     with pytest.raises(RuntimeError, match="client is not connected"):
+        _ = client.pydantic_stub
+    with pytest.raises(RuntimeError, match="client is not connected"):
         _ = client.raw_stub
+
+
+def test_public_stubs_expose_converted_and_raw_rpc_interfaces() -> None:
+    client = SliverClient(_config())
+    converted_stub = AsyncMock()
+    client._stub = converted_stub
+
+    assert client.pydantic_stub is converted_stub
+    assert client.raw_stub is converted_stub.raw
 
 
 async def test_beacon_close_cancels_the_watcher_and_pending_commands() -> None:

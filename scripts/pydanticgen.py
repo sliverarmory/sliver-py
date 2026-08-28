@@ -396,15 +396,11 @@ def _render_stub_model(
     content: list[str] = []
     for nested in info.descriptor.enum_type:
         nested_info = enums[f"{info.full_name}.{nested.name}"]
-        content.append(
-            f"    {nested.name}: ClassVar[type[{nested_info.python_name}]]"
-        )
+        content.append(f"    {nested.name}: TypeAlias = {nested_info.python_name}")
     for nested in info.descriptor.nested_type:
         nested_info = messages[f"{info.full_name}.{nested.name}"]
         if not nested_info.is_map_entry:
-            content.append(
-                f"    {nested.name}: ClassVar[type[{nested_info.python_name}]]"
-            )
+            content.append(f"    {nested.name}: TypeAlias = {nested_info.python_name}")
 
     fields: list[tuple[str, str, bool]] = []
     used_names: set[str] = set()
@@ -597,7 +593,7 @@ def _render_stub_module(
         "",
     ]
     if has_nested_types:
-        lines.extend(["from typing import ClassVar", ""])
+        lines.extend(["from typing import TypeAlias", ""])
     dependency_packages = sorted(
         {
             dependency.split("/", 1)[0]

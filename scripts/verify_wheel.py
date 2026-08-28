@@ -8,9 +8,20 @@ from pathlib import Path
 from zipfile import ZipFile
 
 REQUIRED_FILES = {
+    "sliver/__init__.pyi",
+    "sliver/beacon.pyi",
+    "sliver/client.pyi",
+    "sliver/config.pyi",
+    "sliver/interactive.pyi",
     "sliver/py.typed",
+    "sliver/session.pyi",
+    "sliver/_rpc.pyi",
+    "sliver/_rpc_base.pyi",
     "sliver/_rpc_generated.py",
+    "sliver/_rpc_generated.pyi",
     "sliver/models/__init__.py",
+    "sliver/models/__init__.pyi",
+    "sliver/models/_runtime.pyi",
     "sliver/models/clientpb.py",
     "sliver/models/clientpb.pyi",
     "sliver/models/commonpb.py",

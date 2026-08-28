@@ -47,16 +47,10 @@ jobs:
         run: |
           uv run --frozen python scripts/pydanticgen.py --check
           uv run --frozen python scripts/rpcgen.py --check
+          uv run --frozen python scripts/highlevelstubgen.py --check
 
       - name: Check concrete public types
-        run: |
-          uv run --frozen mypy typecheck tests/typecheck &
-          mypy_pid=$!
-          while kill -0 "$mypy_pid" 2>/dev/null; do
-            echo "mypy is still checking the concrete public API..."
-            sleep 30
-          done
-          wait "$mypy_pid"
+        run: uv run --frozen mypy --no-incremental typecheck tests/typecheck
 
       - name: Run unit and API contract tests
         run: uv run --frozen pytest -vv -ra tests --ignore=tests/e2e

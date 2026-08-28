@@ -11,6 +11,8 @@ from sliver import (
     InteractiveBeacon,
     InteractiveSession,
     SliverClient,
+    SliverClientConfig,
+    SliverWireGuardConfig,
     get_pydantic_model,
 )
 from sliver.models.clientpb import (
@@ -23,7 +25,7 @@ from sliver.models.clientpb import (
     Version,
 )
 from sliver.models.commonpb import File
-from sliver.models.sliverpb import Execute, Ls, Ping, Pwd
+from sliver.models.sliverpb import Execute, Ls, Ping, Pwd, SockTabEntry
 
 
 def model_contract() -> None:
@@ -41,6 +43,35 @@ def model_contract() -> None:
     assert_type(OutputFormat.EXECUTABLE, OutputFormat)
     assert_type(config.format, OutputFormat)
     assert_type(get_pydantic_model(Event), type[Event])
+
+    address = SockTabEntry.SockAddr(ip="127.0.0.1", port=4444)
+    assert_type(address, SockTabEntry.SockAddr)
+
+
+def config_contract() -> None:
+    wireguard = SliverWireGuardConfig(
+        server_pub_key="server-public",
+        client_private_key="client-private",
+        client_pub_key="client-public",
+        client_ip="127.0.0.2",
+        server_ip="127.0.0.1",
+    )
+    config = SliverClientConfig(
+        operator="operator",
+        lhost="127.0.0.1",
+        lport=31337,
+        ca_certificate="ca",
+        certificate="certificate",
+        private_key="private-key",
+        token="token",
+        wg=wireguard,
+    )
+
+    assert_type(wireguard, SliverWireGuardConfig)
+    assert_type(config, SliverClientConfig)
+    assert_type(config.lhost, str)
+    assert_type(config.lport, int)
+    assert_type(config.wg, SliverWireGuardConfig | None)
 
 
 async def client_contract(client: SliverClient, config: ImplantConfig) -> None:

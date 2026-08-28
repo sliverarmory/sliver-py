@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TypeAlias
 
 from . import commonpb as commonpb
 from ._runtime import (
@@ -1120,7 +1120,7 @@ class _SockTabEntry_SockAddr(ProtobufModel):
     ) -> None: ...
 
 class SockTabEntry(ProtobufModel):
-    SockAddr: ClassVar[type[_SockTabEntry_SockAddr]]
+    SockAddr: TypeAlias = _SockTabEntry_SockAddr
     local_addr: _SockTabEntry_SockAddr | None
     remote_addr: _SockTabEntry_SockAddr | None
     sk_state: str

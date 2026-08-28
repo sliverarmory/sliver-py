@@ -201,6 +201,7 @@ uv creates the project environment at `.venv`; editors such as VS Code can use `
 ```console
 uv run ruff format .
 uv run ruff check .
+uv run mypy --no-incremental typecheck tests/typecheck
 uv run pytest
 uv run sphinx-build -W --keep-going -b html docs docs/_build/html
 uv build
@@ -227,6 +228,16 @@ git submodule update --init --remote sliver
 uv sync --frozen --group protobuf
 uv run python scripts/protobufgen.py
 ```
+
+When changing the handwritten client, session, beacon, configuration, or
+interactive APIs, regenerate their source-derived type stubs as well:
+
+```console
+uv run python scripts/highlevelstubgen.py
+```
+
+CI checks all generated sources and stubs for freshness, then type-checks the
+installed public surface with `Any` disallowed.
 
 ### Running tests
 

@@ -17,7 +17,8 @@ from grpc_tools import protoc
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PROTO_DIR = ROOT_DIR / "sliver" / "protobuf"
 SERVICE_PROTO = PROTO_DIR / "rpcpb" / "services.proto"
-OUTPUT_FILE = ROOT_DIR / "src" / "sliver" / "_rpc_generated.py"
+OUTPUT_IMPLEMENTATION_FILE = ROOT_DIR / "src" / "sliver" / "_rpc_generated.py"
+OUTPUT_STUB_FILE = ROOT_DIR / "src" / "sliver" / "_rpc_generated.pyi"
 
 _CALL_TYPES = {
     (False, False): "UnaryUnaryMultiCallable",
@@ -74,8 +75,9 @@ def _model_expression(full_name: str) -> str:
     return ".".join(parts)
 
 
-def _render() -> str:
-    methods = list(_service_descriptor().method)
+def _render_implementation(
+    methods: list[descriptor_pb2.MethodDescriptorProto],
+) -> str:
     call_types = sorted(
         {
             _CALL_TYPES[(method.client_streaming, method.server_streaming)]
@@ -133,7 +135,47 @@ def _render() -> str:
     return "\n".join(lines)
 
 
-def _format_source(source: str) -> str:
+def _render_stub(methods: list[descriptor_pb2.MethodDescriptorProto]) -> str:
+    call_types = sorted(
+        {
+            _CALL_TYPES[(method.client_streaming, method.server_streaming)]
+            for method in methods
+        }
+    )
+    lines = [
+        '"""Generated static Pydantic RPC declarations. Do not edit manually."""',
+        "",
+        "from ._rpc_base import (",
+        *(f"    {call_type}," for call_type in call_types),
+        ")",
+        "from .models import clientpb, commonpb, sliverpb",
+        "",
+        "",
+        "class GeneratedPydanticSliverRPCStub:",
+        '    """Concrete Pydantic method declarations generated from SliverRPC."""',
+        "",
+    ]
+
+    for method in methods:
+        call_type = _CALL_TYPES[(method.client_streaming, method.server_streaming)]
+        request_type = _model_expression(method.input_type)
+        response_type = _model_expression(method.output_type)
+        lines.append(f"    {method.name}: {call_type}[{request_type}, {response_type}]")
+
+    lines.extend(
+        [
+            "",
+            "    def _initialize_rpc_methods(self, raw: object) -> None: ...",
+            "",
+            "",
+            "RPC_METHOD_COUNT: int",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_source(source: str, output_file: Path) -> str:
     ruff = shutil.which("ruff")
     if ruff is None:
         candidate = Path(sys.executable).with_name("ruff")
@@ -143,24 +185,37 @@ def _format_source(source: str) -> str:
         raise RuntimeError("ruff is required to format the generated RPC surface")
 
     with tempfile.TemporaryDirectory(prefix="sliver-py-rpc-format-") as temp_dir:
-        candidate_path = Path(temp_dir) / OUTPUT_FILE.name
+        candidate_path = Path(temp_dir) / output_file.name
         candidate_path.write_text(source)
         subprocess.run([ruff, "format", candidate_path], check=True)
         return candidate_path.read_text()
 
 
 def generate_rpc_surface(*, check: bool = False) -> bool:
-    generated = _format_source(_render())
-    changed = not OUTPUT_FILE.is_file() or OUTPUT_FILE.read_text() != generated
+    methods = list(_service_descriptor().method)
+    generated_files = {
+        OUTPUT_IMPLEMENTATION_FILE: _format_source(
+            _render_implementation(methods), OUTPUT_IMPLEMENTATION_FILE
+        ),
+        OUTPUT_STUB_FILE: _format_source(_render_stub(methods), OUTPUT_STUB_FILE),
+    }
+    stale_files = [
+        output_file
+        for output_file, generated in generated_files.items()
+        if not output_file.is_file() or output_file.read_text() != generated
+    ]
     if check:
-        if changed:
-            print("Generated Pydantic RPC surface is stale")
+        if stale_files:
+            stale_names = ", ".join(path.name for path in stale_files)
+            print(f"Generated Pydantic RPC surface is stale: {stale_names}")
             return False
         print("Generated Pydantic RPC surface is up to date")
         return True
 
-    OUTPUT_FILE.write_text(generated)
-    print(f"Generated Pydantic RPC surface in {OUTPUT_FILE}")
+    for output_file, generated in generated_files.items():
+        output_file.write_text(generated)
+    output_names = ", ".join(path.name for path in generated_files)
+    print(f"Generated Pydantic RPC surface in {output_names}")
     return True
 
 

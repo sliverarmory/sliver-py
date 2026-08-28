@@ -450,7 +450,7 @@ class BaseInteractiveCommands:
     async def execute(
         self: InteractiveObject,
         exe: str,
-        args: list[str] | None,
+        args: list[str] | None = None,
         output: bool = True,
     ) -> models.sliverpb.Execute:
         """Execute a command/subprocess on the remote system

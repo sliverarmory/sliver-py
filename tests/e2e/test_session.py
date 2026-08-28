@@ -9,8 +9,8 @@ import pytest
 
 from sliver import models
 
-from .conftest import COMMAND_TIMEOUT, LiveSession, MTLSListener
-from .harness import E2ESettings
+from .conftest import COMMAND_TIMEOUT, LiveSession, MTLSListener, run_example_cli
+from .harness import E2ESettings, SliverServerHarness
 
 pytestmark = [
     pytest.mark.e2e,
@@ -88,3 +88,31 @@ async def test_generated_session_executes_the_runner_python(
     _assert_implant_response_succeeded(executed)
     assert executed.status == 0
     assert marker.encode() in executed.stdout
+
+
+async def test_interaction_example_runs_against_the_live_session(
+    live_session: LiveSession,
+    e2e_harness: SliverServerHarness,
+    e2e_settings: E2ESettings,
+) -> None:
+    python = Path(sys.executable).resolve()
+    marker = f"sliver-py-session-example-{uuid.uuid4().hex}"
+
+    output = await run_example_cli(
+        e2e_harness,
+        e2e_settings,
+        "examples.interact",
+        "session",
+        live_session.target.id,
+        "--executable",
+        str(python),
+        "--argument=-c",
+        f"--argument=print({marker!r})",
+        "--timeout",
+        str(COMMAND_TIMEOUT),
+        timeout=COMMAND_TIMEOUT,
+    )
+
+    assert live_session.target.id in output
+    assert "Working directory:" in output
+    assert marker in output

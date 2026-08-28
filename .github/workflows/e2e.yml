@@ -40,7 +40,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Check formatting and lint
-        run: uv run --frozen ruff check src tests scripts
+        run: uv run --frozen ruff check src tests scripts examples
 
       - name: Run unit and API contract tests
         run: uv run --frozen pytest -vv -ra tests --ignore=tests/e2e

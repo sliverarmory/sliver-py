@@ -25,10 +25,14 @@ single pytest process so the isolated daemon and listener are reused.
 
 ## Test groups
 
-- `e2e_basic`: server version, operator, inventory, build, and listener APIs.
+- `e2e_basic`: server version, operator, inventory, event, build, and listener
+  APIs. The inventory, event-watcher, and temporary-listener examples run as
+  separate command-line processes against the isolated server.
 - `e2e_session`: native executable generation, registration, ping, working
-  directory, and subprocess execution through a session.
+  directory, and subprocess execution through a session. The generation and
+  interaction examples run as command-line processes and produce the fixture.
 - `e2e_beacon`: the same native lifecycle and interactions through beacon tasks.
+  The beacon-generation and interaction examples run as command-line processes.
 
 Session and beacon generation explicitly use Sliver's `EXECUTABLE` output
 format. A session or beacon is accepted only when its ID was not present before

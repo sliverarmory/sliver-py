@@ -32,7 +32,10 @@ GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True python -m pip install --force-reinstall --
 
 ## Examples
 
-For more examples and details, read the [project documentation](https://sliverpy.rtfd.io/).
+Runnable, cross-platform E2E-tested programs for inventory, listener, event,
+implant-generation, session, and beacon workflows live in
+[`examples/`](examples/). For more details, read the
+[project documentation](https://sliverpy.rtfd.io/).
 
 #### Interact with Sessions
 

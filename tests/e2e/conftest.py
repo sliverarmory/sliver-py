@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import os
-from collections.abc import AsyncIterator, Callable
+import sys
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TypeAlias
 
 import pytest
 import pytest_asyncio
@@ -25,7 +25,6 @@ from .harness import (
     free_loopback_port,
 )
 
-NANOSECOND = 1_000_000_000
 GENERATE_TIMEOUT = 15 * 60
 REGISTRATION_TIMEOUT = 3 * 60
 COMMAND_TIMEOUT = 2 * 60
@@ -60,9 +59,6 @@ class LiveBeacon:
     process: ManagedProcess
     target: models.clientpb.Beacon
     interactive: InteractiveBeacon
-
-
-ImplantConfigFactory: TypeAlias = Callable[..., models.clientpb.ImplantConfig]
 
 
 def _raise_cleanup_failures(
@@ -108,6 +104,109 @@ async def _wait_for_job_removal(
             return
         await asyncio.sleep(POLL_INTERVAL)
     raise TimeoutError(f"listener job {job_id} was not removed")
+
+
+def example_command(
+    harness: SliverServerHarness,
+    settings: E2ESettings,
+    module: str,
+    *arguments: str,
+) -> tuple[str, ...]:
+    """Build a host-native command for one repository example module."""
+
+    return (
+        sys.executable,
+        "-m",
+        module,
+        "--config",
+        str(harness.operator_config_path),
+        *arguments,
+    )
+
+
+async def run_example_cli(
+    harness: SliverServerHarness,
+    settings: E2ESettings,
+    module: str,
+    *arguments: str,
+    timeout: float = COMMAND_TIMEOUT,
+) -> str:
+    """Run an example module to completion and return its standard output."""
+
+    command = example_command(harness, settings, module, *arguments)
+    process = await asyncio.create_subprocess_exec(
+        *command,
+        cwd=settings.repo_root,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+    except asyncio.TimeoutError as error:
+        if process.returncode is None:
+            with suppress(ProcessLookupError):
+                process.kill()
+        _stdout, stderr = await process.communicate()
+        diagnostic = stderr.decode(errors="replace")[-8192:]
+        raise TimeoutError(
+            f"example {module!r} did not exit within {timeout} seconds: {diagnostic}"
+        ) from error
+
+    stderr_text = stderr.decode(errors="replace")[-8192:]
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"example {module!r} exited with {process.returncode}: {stderr_text}"
+        )
+    return stdout.decode(errors="replace")
+
+
+async def _generate_implant_with_example(
+    harness: SliverServerHarness,
+    settings: E2ESettings,
+    listener: MTLSListener,
+    *,
+    kind: str,
+    is_beacon: bool,
+) -> tuple[models.clientpb.Generate, Path]:
+    """Run the generation CLI and reconstruct its public result model."""
+
+    suffix = ".exe" if settings.target_os == "windows" else ""
+    output = harness.implant_root / kind / f"example-{kind}{suffix}"
+    arguments = [
+        listener.c2_url,
+        "--output",
+        str(output),
+        "--timeout",
+        str(GENERATE_TIMEOUT),
+    ]
+    if is_beacon:
+        arguments.append("--beacon")
+    stdout = await run_example_cli(
+        harness,
+        settings,
+        "examples.generate_implant",
+        *arguments,
+        timeout=GENERATE_TIMEOUT + COMMAND_TIMEOUT,
+    )
+    prefix = "Implant name: "
+    implant_name = next(
+        (
+            line.removeprefix(prefix).strip()
+            for line in stdout.splitlines()
+            if line.startswith(prefix)
+        ),
+        "",
+    )
+    if not implant_name:
+        raise RuntimeError(f"generation example omitted the implant name: {stdout!r}")
+    data = output.read_bytes()
+    if not data:
+        raise RuntimeError("generation example wrote an empty implant")
+    generated = models.clientpb.Generate(
+        implant_name=implant_name,
+        file=models.commonpb.File(name=output.name, data=data),
+    )
+    return generated, output
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -180,71 +279,6 @@ async def mtls_listener(
             raise RuntimeError("failed to stop the shared mTLS listener") from error
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def implant_config_factory(
-    e2e_settings: E2ESettings,
-    mtls_listener: MTLSListener,
-) -> ImplantConfigFactory:
-    def create(*, is_beacon: bool) -> models.clientpb.ImplantConfig:
-        return models.clientpb.ImplantConfig(
-            is_beacon=is_beacon,
-            beacon_interval=5 * NANOSECOND if is_beacon else 0,
-            beacon_jitter=0,
-            goos=e2e_settings.target_os,
-            goarch=e2e_settings.target_arch,
-            debug=False,
-            obfuscate_symbols=False,
-            template_name="sliver",
-            include_mtls=True,
-            include_http=False,
-            include_wg=False,
-            include_dns=False,
-            include_name_pipe=False,
-            include_tcp=False,
-            reconnect_interval=NANOSECOND,
-            max_connection_errors=20,
-            poll_timeout=NANOSECOND,
-            c2=[
-                models.clientpb.ImplantC2(
-                    priority=0,
-                    url=mtls_listener.c2_url,
-                )
-            ],
-            connection_strategy="s",
-            format=models.clientpb.OutputFormat.EXECUTABLE,
-            is_shared_lib=False,
-            is_service=False,
-            is_shellcode=False,
-            run_at_load=False,
-            httpc2_config_name="default",
-            net_go_enabled=True,
-        )
-
-    return create
-
-
-def _save_generated_implant(
-    harness: SliverServerHarness,
-    generated: models.clientpb.Generate,
-    *,
-    kind: str,
-) -> Path:
-    assert generated.implant_name
-    assert generated.file is not None
-    assert generated.file.data
-
-    filename = Path(generated.file.name).name
-    if not filename:
-        suffix = ".exe" if os.name == "nt" else ""
-        filename = f"{generated.implant_name}{suffix}"
-
-    destination = harness.implant_root / kind / filename
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(generated.file.data)
-    destination.chmod(0o700)
-    return destination
-
-
 async def _wait_for_session(
     client: SliverClient,
     process: ManagedProcess,
@@ -310,8 +344,9 @@ async def _wait_for_beacon(
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def live_session(
     e2e_harness: SliverServerHarness,
+    e2e_settings: E2ESettings,
     sliver_client: SliverClient,
-    implant_config_factory: ImplantConfigFactory,
+    mtls_listener: MTLSListener,
 ) -> AsyncIterator[LiveSession]:
     previous_ids = {session.id for session in await sliver_client.sessions()}
     generated: models.clientpb.Generate | None = None
@@ -319,16 +354,14 @@ async def live_session(
     process: ManagedProcess | None = None
     target: models.clientpb.Session | None = None
     try:
-        generated = await sliver_client.generate_implant(
-            implant_config_factory(is_beacon=False),
-            timeout=GENERATE_TIMEOUT,
+        generated, executable = await _generate_implant_with_example(
+            e2e_harness,
+            e2e_settings,
+            mtls_listener,
+            kind="session",
+            is_beacon=False,
         )
         assert isinstance(generated, models.clientpb.Generate)
-        executable = _save_generated_implant(
-            e2e_harness,
-            generated,
-            kind="session",
-        )
         process = e2e_harness.launch_implant(
             executable,
             name=f"session-{generated.implant_name}",
@@ -397,8 +430,9 @@ async def live_session(
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def live_beacon(
     e2e_harness: SliverServerHarness,
+    e2e_settings: E2ESettings,
     sliver_client: SliverClient,
-    implant_config_factory: ImplantConfigFactory,
+    mtls_listener: MTLSListener,
 ) -> AsyncIterator[LiveBeacon]:
     previous_ids = {beacon.id for beacon in await sliver_client.beacons()}
     generated: models.clientpb.Generate | None = None
@@ -407,16 +441,14 @@ async def live_beacon(
     target: models.clientpb.Beacon | None = None
     interactive: InteractiveBeacon | None = None
     try:
-        generated = await sliver_client.generate_implant(
-            implant_config_factory(is_beacon=True),
-            timeout=GENERATE_TIMEOUT,
+        generated, executable = await _generate_implant_with_example(
+            e2e_harness,
+            e2e_settings,
+            mtls_listener,
+            kind="beacon",
+            is_beacon=True,
         )
         assert isinstance(generated, models.clientpb.Generate)
-        executable = _save_generated_implant(
-            e2e_harness,
-            generated,
-            kind="beacon",
-        )
         process = e2e_harness.launch_implant(
             executable,
             name=f"beacon-{generated.implant_name}",

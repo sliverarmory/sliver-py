@@ -100,7 +100,7 @@ jobs:
 
       - name: Install test dependencies
         run: >-
-          uv sync --frozen --only-group test
+          uv sync --frozen --group test
           2>&1 | tee ".e2e-results/${{ matrix.id }}/uv-sync.log"
 
       - name: Generate host-native Sliver assets
@@ -125,7 +125,7 @@ jobs:
       - name: Run Sliver E2E suite
         timeout-minutes: 240
         run: >-
-          uv run --frozen --only-group test pytest -vv -ra
+          uv run --frozen --group test pytest -vv -ra
           tests/e2e/test_basic.py
           tests/e2e/test_session.py
           tests/e2e/test_beacon.py

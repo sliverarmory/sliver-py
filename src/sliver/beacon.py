@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
+from contextlib import suppress
 from typing import Any
 
 import grpc
@@ -55,7 +56,38 @@ class BaseBeacon:
         self.beacon_tasks: dict[
             str, tuple[asyncio.Future[Any], type[ProtobufModel] | None]
         ] = {}
-        asyncio.get_event_loop().create_task(self.taskresult_events())
+        self._taskresult_ready = asyncio.Event()
+        self._taskresult_error: Exception | None = None
+        self._closed = False
+        self._taskresult_watcher = asyncio.get_event_loop().create_task(
+            self.taskresult_events()
+        )
+
+    async def close(self) -> None:
+        """Stop watching for beacon task results and cancel pending commands."""
+
+        if self._closed:
+            return
+        self._closed = True
+        for task_future, _ in self.beacon_tasks.values():
+            task_future.cancel()
+        self.beacon_tasks.clear()
+
+        if not self._taskresult_watcher.done():
+            self._taskresult_watcher.cancel()
+        with suppress(asyncio.CancelledError, Exception):
+            await self._taskresult_watcher
+
+    async def _wait_for_taskresult_watcher(self) -> None:
+        """Wait until the result stream is subscribed before queueing a task."""
+
+        if self._closed:
+            raise RuntimeError("beacon interaction is closed")
+        await self._taskresult_ready.wait()
+        if self._taskresult_watcher.done():
+            raise RuntimeError("beacon task-result watcher is not running") from (
+                self._taskresult_error
+            )
 
     @property
     def beacon_id(self) -> str:
@@ -159,46 +191,64 @@ class BaseBeacon:
         Monitor task events for results, resolve futures for any results
         we get back.
         """
-        async for event in self._stub.Events(models.commonpb.Empty()):
-            if event.event_type != "beacon-taskresult":
-                continue
-            task_id: str | None = None
-            task_future: asyncio.Future[Any] | None = None
-            try:
-                beacon_task_class = models.clientpb.BeaconTask.__protobuf_class__
-                if beacon_task_class is None:
-                    raise TypeError("BeaconTask model has no protobuf class")
-                beacon_task_proto = beacon_task_class()
-                beacon_task_proto.ParseFromString(event.data)
-                beacon_task = models.clientpb.BeaconTask.from_protobuf(
-                    beacon_task_proto
-                )
-                task_id = beacon_task.id
-                if task_id not in self.beacon_tasks:
+        try:
+            events = self._stub.Events(models.commonpb.Empty())
+            self._taskresult_ready.set()
+            async for event in events:
+                if event.event_type != "beacon-taskresult":
                     continue
-                task_content = await self._stub.GetBeaconTaskContent(
-                    models.clientpb.BeaconTask(id=task_id)
-                )
-                task_future, model_type = self.beacon_tasks[task_id]
-                if model_type is not None:
-                    result_class = model_type.__protobuf_class__
-                    if result_class is None:
-                        raise TypeError(f"{model_type.__name__} has no protobuf class")
-                    result_proto = result_class()
-                    result_proto.ParseFromString(task_content.response)
-                    result = model_type.from_protobuf(result_proto)
-                else:
-                    result = None
-                self.beacon_tasks.pop(task_id, None)
-                task_future.set_result(result)
-            except Exception as err:
-                if task_id is not None:
-                    pending = self.beacon_tasks.pop(task_id, None)
-                    if task_future is None and pending is not None:
-                        task_future = pending[0]
-                if task_future is not None and not task_future.done():
-                    task_future.set_exception(err)
-                self._log.exception(err)
+                task_id: str | None = None
+                task_future: asyncio.Future[Any] | None = None
+                try:
+                    beacon_task_class = models.clientpb.BeaconTask.__protobuf_class__
+                    if beacon_task_class is None:
+                        raise TypeError("BeaconTask model has no protobuf class")
+                    beacon_task_proto = beacon_task_class()
+                    beacon_task_proto.ParseFromString(event.data)
+                    beacon_task = models.clientpb.BeaconTask.from_protobuf(
+                        beacon_task_proto
+                    )
+                    task_id = beacon_task.id
+                    if task_id not in self.beacon_tasks:
+                        continue
+                    task_content = await self._stub.GetBeaconTaskContent(
+                        models.clientpb.BeaconTask(id=task_id)
+                    )
+                    task_future, model_type = self.beacon_tasks[task_id]
+                    if model_type is not None:
+                        result_class = model_type.__protobuf_class__
+                        if result_class is None:
+                            raise TypeError(
+                                f"{model_type.__name__} has no protobuf class"
+                            )
+                        result_proto = result_class()
+                        result_proto.ParseFromString(task_content.response)
+                        result = model_type.from_protobuf(result_proto)
+                    else:
+                        result = None
+                    self.beacon_tasks.pop(task_id, None)
+                    task_future.set_result(result)
+                except Exception as err:
+                    if task_id is not None:
+                        pending = self.beacon_tasks.pop(task_id, None)
+                        if task_future is None and pending is not None:
+                            task_future = pending[0]
+                    if task_future is not None and not task_future.done():
+                        task_future.set_exception(err)
+                    self._log.exception(err)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            self._taskresult_error = err
+            self._log.exception(err)
+        finally:
+            self._taskresult_ready.set()
+            if not self._closed:
+                stopped = RuntimeError("beacon task-result watcher stopped")
+                for task_future, _ in self.beacon_tasks.values():
+                    if not task_future.done():
+                        task_future.set_exception(stopped)
+                self.beacon_tasks.clear()
 
 
 def beacon_taskresult(model_type: type[ProtobufModel] | None):
@@ -210,6 +260,7 @@ def beacon_taskresult(model_type: type[ProtobufModel] | None):
     def func(method):
         @functools.wraps(method)
         async def wrapper(self, *args, **kwargs):
+            await self._wait_for_taskresult_watcher()
             task_response = await method(self, *args, **kwargs)
             if task_response.response is None or not task_response.response.task_id:
                 raise RuntimeError("beacon command did not return a task ID")

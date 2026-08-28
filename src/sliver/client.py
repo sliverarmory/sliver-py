@@ -51,6 +51,19 @@ class BaseClient:
     def is_connected(self) -> bool:
         return self._channel is not None
 
+    async def close(self) -> None:
+        """Close the active gRPC channel.
+
+        Calling ``close`` more than once is safe. A closed client may be
+        connected again with :meth:`SliverClient.connect`.
+        """
+
+        channel = self._channel
+        self._channel = None  # type: ignore[assignment]
+        self._stub = None  # type: ignore[assignment]
+        if channel is not None:
+            await channel.close()
+
     @property
     def target(self) -> str:
         return f"{self.config.lhost}:{self.config.lport}"

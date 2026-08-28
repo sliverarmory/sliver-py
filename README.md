@@ -186,3 +186,10 @@ The integration tests require a running Sliver server, an operator configuration
 - `uv run pytest`: all tests
 - `uv run pytest -m client`: top-level client API tests
 - `uv run pytest -m interactive`: interactive session tests
+
+The managed end-to-end suite runs in GitHub Actions on native macOS/arm64,
+Linux/amd64, and Windows/amd64 runners. Each job compiles the pinned Sliver
+server, creates an isolated localhost operator, and executes generated session
+and beacon implants before testing their APIs. These tests are skipped locally
+unless explicitly enabled; see [`tests/e2e/README.md`](tests/e2e/README.md) for
+the lifecycle, safety boundaries, and marker groups.

@@ -1,6 +1,9 @@
 /.vscode
 /src/test*.py
 /workdir
+/.e2e-bin/
+/.e2e-results/
+/.e2e-work/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

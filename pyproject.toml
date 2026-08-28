@@ -70,6 +70,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "client: tests that exercise the top-level Sliver client API",
+    "e2e: tests that build or execute Sliver components on an isolated runner",
+    "e2e_basic: end-to-end tests for server and top-level client interactions",
+    "e2e_beacon: end-to-end tests that generate and interact with a native beacon",
+    "e2e_session: end-to-end tests that generate and interact with a native session",
     "interactive: tests that exercise an interactive Sliver session",
     "integration: tests that require a running Sliver server",
 ]

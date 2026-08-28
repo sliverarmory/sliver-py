@@ -40,8 +40,7 @@ async def sliver_client() -> AsyncIterator[SliverClient]:
     try:
         yield client
     finally:
-        if client._channel is not None:
-            await client._channel.close()
+        await client.close()
 
 
 @pytest_asyncio.fixture(scope="module")

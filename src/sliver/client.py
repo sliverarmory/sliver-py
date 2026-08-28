@@ -25,8 +25,6 @@ from . import models
 from ._rpc import PydanticSliverRPCStub
 from .beacon import InteractiveBeacon
 from .config import SliverClientConfig
-from .models import protobuf_to_pydantic
-from .pb.rpcpb.services_pb2_grpc import SliverRPCStub
 from .session import InteractiveSession
 
 KB = 1024
@@ -42,10 +40,12 @@ class BaseClient:
     KEEP_ALIVE_TIMEOUT = 10000
     CERT_COMMON_NAME = "multiplayer"
 
-    def __init__(self, config: SliverClientConfig):
+    def __init__(self, config: SliverClientConfig) -> None:
+        if not isinstance(config, SliverClientConfig):
+            raise TypeError("config must be a SliverClientConfig Pydantic model")
         self.config = config
-        self._channel: grpc.aio.Channel = None  # type: ignore[assignment]
-        self._stub: PydanticSliverRPCStub = None  # type: ignore[assignment]
+        self._channel: grpc.aio.Channel | None = None
+        self._stub: PydanticSliverRPCStub | None = None
         self._log = logging.getLogger(self.__class__.__name__)
 
     def is_connected(self) -> bool:
@@ -59,8 +59,8 @@ class BaseClient:
         """
 
         channel = self._channel
-        self._channel = None  # type: ignore[assignment]
-        self._stub = None  # type: ignore[assignment]
+        self._channel = None
+        self._stub = None
         if channel is not None:
             await channel.close()
 
@@ -82,7 +82,7 @@ class BaseClient:
         )
 
     @property
-    def options(self):
+    def options(self) -> list[tuple[str, int | str]]:
         return [
             ("grpc.keepalive_timeout_ms", self.KEEP_ALIVE_TIMEOUT),
             ("grpc.ssl_target_name_override", self.CERT_COMMON_NAME),
@@ -101,16 +101,6 @@ class BaseClient:
         if self._stub is None:
             raise RuntimeError("client is not connected")
         return self._stub
-
-    @property
-    def raw_stub(self) -> SliverRPCStub:
-        """Return the generated protobuf stub for unsupported low-level RPCs.
-
-        The raw stub does not perform Pydantic conversion and is available only
-        while the client is connected.
-        """
-
-        return self.pydantic_stub.raw
 
 
 class SliverClient(BaseClient):
@@ -136,7 +126,7 @@ class SliverClient(BaseClient):
         return await self.version()
 
     async def interact_session(
-        self, session_id: str, timeout=TIMEOUT
+        self, session_id: str, timeout: int = TIMEOUT
     ) -> InteractiveSession | None:
         """Interact with a session, returns an :class:`InteractiveSession`
 
@@ -148,10 +138,12 @@ class SliverClient(BaseClient):
         """
         session = await self.session_by_id(session_id, timeout)
         if session:
+            if self._channel is None:
+                raise RuntimeError("client is not connected")
             return InteractiveSession(session, self._channel, timeout)
 
     async def interact_beacon(
-        self, beacon_id: str, timeout=TIMEOUT
+        self, beacon_id: str, timeout: int = TIMEOUT
     ) -> InteractiveBeacon | None:
         """Interact with a beacon, returns an :class:`InteractiveBeacon`
 
@@ -163,10 +155,12 @@ class SliverClient(BaseClient):
         """
         beacon = await self.beacon_by_id(beacon_id, timeout)
         if beacon:
+            if self._channel is None:
+                raise RuntimeError("client is not connected")
             return InteractiveBeacon(beacon, self._channel, timeout)
 
     async def session_by_id(
-        self, session_id: str, timeout=TIMEOUT
+        self, session_id: str, timeout: int = TIMEOUT
     ) -> models.clientpb.Session | None:
         """Get the session information from a session ID
 
@@ -182,7 +176,7 @@ class SliverClient(BaseClient):
                 return session
 
     async def beacon_by_id(
-        self, beacon_id: str, timeout=TIMEOUT
+        self, beacon_id: str, timeout: int = TIMEOUT
     ) -> models.clientpb.Beacon | None:
         """Get the beacon information from a beacon ID
 
@@ -203,7 +197,7 @@ class SliverClient(BaseClient):
         :yield: A stream of events
         :rtype: models.clientpb.Event
         """
-        async for event in self._stub.Events(models.commonpb.Empty()):
+        async for event in self.pydantic_stub.Events(models.commonpb.Empty()):
             yield event
 
     async def on(
@@ -222,7 +216,7 @@ class SliverClient(BaseClient):
             if event.event_type in event_types:
                 yield event
 
-    async def version(self, timeout=TIMEOUT) -> models.clientpb.Version:
+    async def version(self, timeout: int = TIMEOUT) -> models.clientpb.Version:
         """Get server version information
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -230,9 +224,11 @@ class SliverClient(BaseClient):
         :return: Pydantic server-version model
         :rtype: models.clientpb.Version
         """
-        return await self._stub.GetVersion(models.commonpb.Empty(), timeout=timeout)
+        return await self.pydantic_stub.GetVersion(
+            models.commonpb.Empty(), timeout=timeout
+        )
 
-    async def operators(self, timeout=TIMEOUT) -> list[models.clientpb.Operator]:
+    async def operators(self, timeout: int = TIMEOUT) -> list[models.clientpb.Operator]:
         """Get a list of operators and their online status
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -240,12 +236,12 @@ class SliverClient(BaseClient):
         :return: Pydantic operator models
         :rtype: list[models.clientpb.Operator]
         """
-        operators = await self._stub.GetOperators(
+        operators = await self.pydantic_stub.GetOperators(
             models.commonpb.Empty(), timeout=timeout
         )
         return list(operators.operators)
 
-    async def sessions(self, timeout=TIMEOUT) -> list[models.clientpb.Session]:
+    async def sessions(self, timeout: int = TIMEOUT) -> list[models.clientpb.Session]:
         """Get a list of active sessions
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -253,12 +249,14 @@ class SliverClient(BaseClient):
         :return: Pydantic session models
         :rtype: list[models.clientpb.Session]
         """
-        sessions: models.clientpb.Sessions = await self._stub.GetSessions(
+        sessions: models.clientpb.Sessions = await self.pydantic_stub.GetSessions(
             models.commonpb.Empty(), timeout=timeout
         )
         return list(sessions.sessions)
 
-    async def rename_session(self, session_id: str, name: str, timeout=TIMEOUT) -> None:
+    async def rename_session(
+        self, session_id: str, name: str, timeout: int = TIMEOUT
+    ) -> None:
         """Rename a session
 
         :param session_id: Session ID to update
@@ -271,9 +269,14 @@ class SliverClient(BaseClient):
         :rtype: None
         """
         rename_req = models.clientpb.RenameReq(session_id=session_id, name=name)
-        await self._stub.Rename(rename_req, timeout=timeout)
+        await self.pydantic_stub.Rename(rename_req, timeout=timeout)
 
-    async def kill_session(self, session_id: str, force=False, timeout=TIMEOUT) -> None:
+    async def kill_session(
+        self,
+        session_id: str,
+        force: bool = False,
+        timeout: int = TIMEOUT,
+    ) -> None:
         """Kill a session
 
         :param session_id: Session ID to kill
@@ -285,20 +288,22 @@ class SliverClient(BaseClient):
         """
         request = models.commonpb.Request(session_id=session_id, timeout=timeout)
         kill_req = models.sliverpb.KillReq(force=force, request=request)
-        await self._stub.Kill(kill_req, timeout=timeout)
+        await self.pydantic_stub.Kill(kill_req, timeout=timeout)
 
-    async def beacons(self, timeout=TIMEOUT) -> list[models.clientpb.Beacon]:
+    async def beacons(self, timeout: int = TIMEOUT) -> list[models.clientpb.Beacon]:
         """Get a list of active beacons
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :rtype: list[models.clientpb.Beacon]
         """
-        beacons: models.clientpb.Beacons = await self._stub.GetBeacons(
+        beacons: models.clientpb.Beacons = await self.pydantic_stub.GetBeacons(
             models.commonpb.Empty(), timeout=timeout
         )
         return list(beacons.beacons)
 
-    async def rename_beacon(self, beacon_id: str, name: str, timeout=TIMEOUT) -> None:
+    async def rename_beacon(
+        self, beacon_id: str, name: str, timeout: int = TIMEOUT
+    ) -> None:
         """Rename a beacon
 
         :param beacon_id: Beacon ID to update
@@ -311,9 +316,9 @@ class SliverClient(BaseClient):
         :rtype: None
         """
         rename_req = models.clientpb.RenameReq(beacon_id=beacon_id, name=name)
-        await self._stub.Rename(rename_req, timeout=timeout)
+        await self.pydantic_stub.Rename(rename_req, timeout=timeout)
 
-    async def kill_beacon(self, beacon_id: str, timeout=TIMEOUT) -> None:
+    async def kill_beacon(self, beacon_id: str, timeout: int = TIMEOUT) -> None:
         """Remove a beacon record from the server.
 
         This does not terminate a running beacon process.
@@ -324,10 +329,10 @@ class SliverClient(BaseClient):
         :type timeout: int, optional
         """
         beacon_rm = models.clientpb.Beacon(id=beacon_id)
-        await self._stub.RmBeacon(beacon_rm, timeout=timeout)
+        await self.pydantic_stub.RmBeacon(beacon_rm, timeout=timeout)
 
     async def beacon_tasks(
-        self, beacon_id: str, timeout=TIMEOUT
+        self, beacon_id: str, timeout: int = TIMEOUT
     ) -> list[models.clientpb.BeaconTask]:
         """Get a list of tasks for a beacon
 
@@ -339,11 +344,11 @@ class SliverClient(BaseClient):
         :rtype: list[models.clientpb.BeaconTask]
         """
         beacon = models.clientpb.Beacon(id=beacon_id)
-        tasks = await self._stub.GetBeaconTasks(beacon, timeout=timeout)
+        tasks = await self.pydantic_stub.GetBeaconTasks(beacon, timeout=timeout)
         return list(tasks.tasks)
 
     async def beacon_task_content(
-        self, task_id: str, timeout=TIMEOUT
+        self, task_id: str, timeout: int = TIMEOUT
     ) -> models.clientpb.BeaconTask:
         """Get the stored request and response content for a beacon task
 
@@ -355,10 +360,10 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.BeaconTask
         """
         task_req = models.clientpb.BeaconTask(id=task_id)
-        task = await self._stub.GetBeaconTaskContent(task_req, timeout=timeout)
+        task = await self.pydantic_stub.GetBeaconTaskContent(task_req, timeout=timeout)
         return task
 
-    async def jobs(self, timeout=TIMEOUT) -> list[models.clientpb.Job]:
+    async def jobs(self, timeout: int = TIMEOUT) -> list[models.clientpb.Job]:
         """Get a list of active jobs
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -366,13 +371,13 @@ class SliverClient(BaseClient):
         :return: Pydantic job models
         :rtype: list[models.clientpb.Job]
         """
-        jobs: models.clientpb.Jobs = await self._stub.GetJobs(
+        jobs: models.clientpb.Jobs = await self.pydantic_stub.GetJobs(
             models.commonpb.Empty(), timeout=timeout
         )
         return list(jobs.active)
 
     async def job_by_id(
-        self, job_id: int, timeout=TIMEOUT
+        self, job_id: int, timeout: int = TIMEOUT
     ) -> models.clientpb.Job | None:
         """Get job by id
 
@@ -388,7 +393,7 @@ class SliverClient(BaseClient):
                 return job
 
     async def job_by_port(
-        self, job_port: int, timeout=TIMEOUT
+        self, job_port: int, timeout: int = TIMEOUT
     ) -> models.clientpb.Job | None:
         """Get job by port
 
@@ -403,7 +408,9 @@ class SliverClient(BaseClient):
             if job.port == job_port:
                 return job
 
-    async def kill_job(self, job_id: int, timeout=TIMEOUT) -> models.clientpb.KillJob:
+    async def kill_job(
+        self, job_id: int, timeout: int = TIMEOUT
+    ) -> models.clientpb.KillJob:
         """Kill a job
 
         :param job_id: Numeric job ID to kill
@@ -414,13 +421,13 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.KillJob
         """
         kill_req = models.clientpb.KillJobReq(id=job_id)
-        return await self._stub.KillJob(kill_req, timeout=timeout)
+        return await self.pydantic_stub.KillJob(kill_req, timeout=timeout)
 
     async def start_mtls_listener(
         self,
         host: str = "0.0.0.0",
         port: int = 8888,
-        timeout=TIMEOUT,
+        timeout: int = TIMEOUT,
     ) -> models.clientpb.ListenerJob:
         """Start a mutual TLS (mTLS) C2 listener
 
@@ -434,7 +441,7 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.ListenerJob
         """
         mtls_req = models.clientpb.MTLSListenerReq(host=host, port=port)
-        return await self._stub.StartMTLSListener(mtls_req, timeout=timeout)
+        return await self.pydantic_stub.StartMTLSListener(mtls_req, timeout=timeout)
 
     async def start_wg_listener(
         self,
@@ -473,7 +480,7 @@ class SliverClient(BaseClient):
             n_port=n_port,
             key_port=key_port,
         )
-        return await self._stub.StartWGListener(wg_req, timeout=timeout)
+        return await self.pydantic_stub.StartWGListener(wg_req, timeout=timeout)
 
     async def start_dns_listener(
         self,
@@ -481,7 +488,7 @@ class SliverClient(BaseClient):
         host: str = "0.0.0.0",
         port: int = 53,
         canaries: bool = True,
-        enforce_otp=True,
+        enforce_otp: bool = True,
         timeout: int = TIMEOUT,
     ) -> models.clientpb.ListenerJob:
         """Start a DNS C2 listener
@@ -511,7 +518,7 @@ class SliverClient(BaseClient):
             port=port,
             enforce_otp=enforce_otp,
         )
-        return await self._stub.StartDNSListener(dns_req, timeout=timeout)
+        return await self.pydantic_stub.StartDNSListener(dns_req, timeout=timeout)
 
     async def start_http_listener(
         self,
@@ -544,7 +551,7 @@ class SliverClient(BaseClient):
             secure=False,
             website=website,
         )
-        return await self._stub.StartHTTPListener(http_req, timeout=timeout)
+        return await self.pydantic_stub.StartHTTPListener(http_req, timeout=timeout)
 
     async def start_https_listener(
         self,
@@ -604,10 +611,14 @@ class SliverClient(BaseClient):
             long_poll_jitter=long_poll_jitter,
             randomize_jarm=randomize_jarm,
         )
-        return await self._stub.StartHTTPSListener(https_req, timeout=timeout)
+        return await self.pydantic_stub.StartHTTPSListener(https_req, timeout=timeout)
 
     async def start_tcp_stager_listener(
-        self, host: str, port: int, data: bytes, timeout=TIMEOUT
+        self,
+        host: str,
+        port: int,
+        data: bytes,
+        timeout: int = TIMEOUT,
     ) -> models.clientpb.StagerListener:
         """Start a TCP stager listener
 
@@ -621,6 +632,10 @@ class SliverClient(BaseClient):
         :type timeout: int, optional
         :return: Pydantic stager-listener model
         :rtype: models.clientpb.StagerListener
+
+        The current Sliver schema only exposes a TCP stager-listener RPC.
+        The HTTP, HTTPS, and Metasploit staging RPCs found in older Sliver
+        releases no longer exist, so this client does not emulate them.
         """
         stage_req = models.clientpb.StagerListenerReq(
             protocol=models.clientpb.StageProtocol.TCP,
@@ -628,7 +643,9 @@ class SliverClient(BaseClient):
             port=port,
             data=data,
         )
-        return await self._stub.StartTCPStagerListener(stage_req, timeout=timeout)
+        return await self.pydantic_stub.StartTCPStagerListener(
+            stage_req, timeout=timeout
+        )
 
     async def generate_implant(
         self, config: models.clientpb.ImplantConfig, timeout: int = 360
@@ -642,11 +659,34 @@ class SliverClient(BaseClient):
         :return: Pydantic model containing the generated implant
         :rtype: models.clientpb.Generate
         """
-        req = models.clientpb.GenerateReq(config=protobuf_to_pydantic(config))
-        return await self._stub.Generate(req, timeout=timeout)
+        req = models.clientpb.GenerateReq(config=config)
+        return await self.pydantic_stub.Generate(req, timeout=timeout)
+
+    async def generate_stage(
+        self,
+        request: models.clientpb.GenerateStageReq,
+        timeout: int = 360,
+    ) -> models.clientpb.Generate:
+        """Generate a stage from a saved implant profile.
+
+        ``request`` is the Pydantic model generated from Sliver's current
+        ``GenerateStageReq`` descriptor. It supports the profile and optional
+        implant name, AES or RC4 encryption settings, size prefixing, and
+        compression settings defined by the server schema. Set ``compress``
+        for the current server; the descriptor's legacy ``compress_f`` field
+        is retained upstream but is not consumed by the stage generator.
+
+        :param request: Stage-generation settings
+        :type request: models.clientpb.GenerateStageReq
+        :param timeout: gRPC timeout, defaults to 360 seconds
+        :type timeout: int, optional
+        :return: Pydantic model containing the generated stage
+        :rtype: models.clientpb.Generate
+        """
+        return await self.pydantic_stub.GenerateStage(request, timeout=timeout)
 
     async def regenerate_implant(
-        self, implant_name: str, timeout=TIMEOUT
+        self, implant_name: str, timeout: int = TIMEOUT
     ) -> models.clientpb.Generate:
         """Regenerate an implant binary given the implants "name"
 
@@ -658,10 +698,10 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.Generate
         """
         regenerate = models.clientpb.RegenerateReq(implant_name=implant_name)
-        return await self._stub.Regenerate(regenerate, timeout=timeout)
+        return await self.pydantic_stub.Regenerate(regenerate, timeout=timeout)
 
     async def implant_builds(
-        self, timeout=TIMEOUT
+        self, timeout: int = TIMEOUT
     ) -> dict[str, models.clientpb.ImplantConfig]:
         """Get information about historical implant builds
 
@@ -670,12 +710,14 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        builds: models.clientpb.ImplantBuilds = await self._stub.ImplantBuilds(
+        builds: models.clientpb.ImplantBuilds = await self.pydantic_stub.ImplantBuilds(
             models.commonpb.Empty(), timeout=timeout
         )
         return dict(builds.configs)
 
-    async def delete_implant_build(self, implant_name: str, timeout=TIMEOUT) -> None:
+    async def delete_implant_build(
+        self, implant_name: str, timeout: int = TIMEOUT
+    ) -> None:
         """Delete a historical implant build from the server by name
 
         :param implant_name: The name of the implant build to delete
@@ -684,9 +726,9 @@ class SliverClient(BaseClient):
         :type timeout: int, optional
         """
         delete = models.clientpb.DeleteReq(name=implant_name)
-        await self._stub.DeleteImplantBuild(delete, timeout=timeout)
+        await self.pydantic_stub.DeleteImplantBuild(delete, timeout=timeout)
 
-    async def canaries(self, timeout=TIMEOUT) -> list[models.clientpb.DNSCanary]:
+    async def canaries(self, timeout: int = TIMEOUT) -> list[models.clientpb.DNSCanary]:
         """Get canaries generated during implant builds and their metadata.
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -694,11 +736,13 @@ class SliverClient(BaseClient):
         :return: Pydantic DNS-canary models
         :rtype: list[models.clientpb.DNSCanary]
         """
-        canaries = await self._stub.Canaries(models.commonpb.Empty(), timeout=timeout)
+        canaries = await self.pydantic_stub.Canaries(
+            models.commonpb.Empty(), timeout=timeout
+        )
         return list(canaries.canaries)
 
     async def generate_wg_client_config(
-        self, timeout=TIMEOUT
+        self, timeout: int = TIMEOUT
     ) -> models.clientpb.WGClientConfig:
         """Generate a new WireGuard client configuration files
 
@@ -707,11 +751,13 @@ class SliverClient(BaseClient):
         :return: Pydantic WireGuard-client configuration model
         :rtype: models.clientpb.WGClientConfig
         """
-        return await self._stub.GenerateWGClientConfig(
+        return await self.pydantic_stub.GenerateWGClientConfig(
             models.commonpb.Empty(), timeout=timeout
         )
 
-    async def generate_wg_ip(self, timeout=TIMEOUT) -> models.clientpb.UniqueWGIP:
+    async def generate_wg_ip(
+        self, timeout: int = TIMEOUT
+    ) -> models.clientpb.UniqueWGIP:
         """Generate a unique IP address for use with WireGuard
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -719,12 +765,12 @@ class SliverClient(BaseClient):
         :return: Pydantic unique WireGuard IP model
         :rtype: models.clientpb.UniqueWGIP
         """
-        return await self._stub.GenerateUniqueIP(
+        return await self.pydantic_stub.GenerateUniqueIP(
             models.commonpb.Empty(), timeout=timeout
         )
 
     async def implant_profiles(
-        self, timeout=TIMEOUT
+        self, timeout: int = TIMEOUT
     ) -> list[models.clientpb.ImplantProfile]:
         """Get a list of all implant configuration profiles on the server
 
@@ -733,12 +779,14 @@ class SliverClient(BaseClient):
         :return: Pydantic implant-profile models
         :rtype: list[models.clientpb.ImplantProfile]
         """
-        profiles = await self._stub.ImplantProfiles(
+        profiles = await self.pydantic_stub.ImplantProfiles(
             models.commonpb.Empty(), timeout=timeout
         )
         return list(profiles.profiles)
 
-    async def delete_implant_profile(self, profile_name, timeout=TIMEOUT) -> None:
+    async def delete_implant_profile(
+        self, profile_name: str, timeout: int = TIMEOUT
+    ) -> None:
         """Delete an implant configuration profile by name
 
         :param profile_name: Name of the profile to delete
@@ -747,10 +795,12 @@ class SliverClient(BaseClient):
         :type timeout: int, optional
         """
         delete = models.clientpb.DeleteReq(name=profile_name)
-        await self._stub.DeleteImplantProfile(delete, timeout=timeout)
+        await self.pydantic_stub.DeleteImplantProfile(delete, timeout=timeout)
 
     async def save_implant_profile(
-        self, profile: models.clientpb.ImplantProfile, timeout=TIMEOUT
+        self,
+        profile: models.clientpb.ImplantProfile,
+        timeout: int = TIMEOUT,
     ) -> models.clientpb.ImplantProfile:
         """Save an implant configuration profile to the server
 
@@ -761,12 +811,14 @@ class SliverClient(BaseClient):
         :return: Pydantic implant-profile model
         :rtype: models.clientpb.ImplantProfile
         """
-        return await self._stub.SaveImplantProfile(
-            protobuf_to_pydantic(profile), timeout=timeout
-        )
+        return await self.pydantic_stub.SaveImplantProfile(profile, timeout=timeout)
 
     async def shellcode(
-        self, data: bytes, function_name: str, arguments: str = "", timeout=TIMEOUT
+        self,
+        data: bytes,
+        function_name: str,
+        arguments: str = "",
+        timeout: int = TIMEOUT,
     ) -> models.clientpb.ShellcodeRDI:
         """Generate Donut shellcode
 
@@ -784,9 +836,9 @@ class SliverClient(BaseClient):
         shell_req = models.clientpb.ShellcodeRDIReq(
             data=data, function_name=function_name, arguments=arguments
         )
-        return await self._stub.ShellcodeRDI(shell_req, timeout=timeout)
+        return await self.pydantic_stub.ShellcodeRDI(shell_req, timeout=timeout)
 
-    async def websites(self, timeout=TIMEOUT) -> list[models.clientpb.Website]:
+    async def websites(self, timeout: int = TIMEOUT) -> list[models.clientpb.Website]:
         """Get a list of websites
 
         :param timeout: gRPC timeout, defaults to 60 seconds
@@ -794,17 +846,89 @@ class SliverClient(BaseClient):
         :return: Pydantic website models
         :rtype: list[models.clientpb.Website]
         """
-        websites = await self._stub.Websites(models.commonpb.Empty(), timeout=timeout)
+        websites = await self.pydantic_stub.Websites(
+            models.commonpb.Empty(), timeout=timeout
+        )
         return list(websites.websites)
 
-    async def website(self, name: str, timeout=TIMEOUT) -> models.clientpb.Website:
+    async def website(
+        self, name: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Website:
         """Get a website and its content by name."""
 
-        return await self._stub.Website(
+        return await self.pydantic_stub.Website(
             models.clientpb.Website(name=name), timeout=timeout
         )
 
-    async def remove_website(self, name: str, timeout=TIMEOUT) -> None:
+    async def update_website(
+        self,
+        website: models.clientpb.Website,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.Website:
+        """Synchronize an existing website with a Pydantic website model.
+
+        Sliver does not expose a whole-website update RPC. This helper uses the
+        current content RPCs to remove paths absent from ``website.contents``
+        and then upsert every desired path. The operations are sequential and
+        are therefore not atomic on the server.
+
+        Map keys are the canonical web paths. A content model may leave its
+        own ``path`` empty, in which case the corresponding map key is used;
+        a non-empty mismatched path is rejected. Content is always rebound to
+        the fetched website ID so stale model IDs cannot update another site.
+
+        :param website: Desired Pydantic website model
+        :type website: models.clientpb.Website
+        :param timeout: gRPC timeout, defaults to 60 seconds
+        :type timeout: int, optional
+        :return: The synchronized Pydantic website model from the server
+        :rtype: models.clientpb.Website
+        """
+        if not isinstance(website, models.clientpb.Website):
+            raise TypeError("website must be a models.clientpb.Website Pydantic model")
+        if not website.name:
+            raise ValueError("website.name must not be empty")
+
+        current = await self.website(website.name, timeout=timeout)
+        if website.id and current.id and website.id != current.id:
+            raise ValueError(
+                f"website ID {website.id!r} does not match the server's "
+                f"ID {current.id!r} for {website.name!r}"
+            )
+
+        desired_contents: dict[str, models.clientpb.WebContent] = {}
+        for path, content in website.contents.items():
+            if content.path and content.path != path:
+                raise ValueError(
+                    f"website content path {content.path!r} does not match "
+                    f"its map key {path!r}"
+                )
+            desired_contents[path] = content.model_copy(
+                update={"path": path, "website_id": current.id}
+            )
+
+        removed_paths = sorted(set(current.contents) - set(desired_contents))
+        if removed_paths:
+            current = await self.pydantic_stub.WebsiteRemoveContent(
+                models.clientpb.WebsiteRemoveContent(
+                    name=website.name,
+                    paths=removed_paths,
+                ),
+                timeout=timeout,
+            )
+
+        if not desired_contents:
+            return current
+
+        return await self.pydantic_stub.WebsiteUpdateContent(
+            models.clientpb.WebsiteAddContent(
+                name=website.name,
+                contents=desired_contents,
+            ),
+            timeout=timeout,
+        )
+
+    async def remove_website(self, name: str, timeout: int = TIMEOUT) -> None:
         """Remove an entire website and its content
 
         :param name: The name of the website to remove
@@ -813,7 +937,7 @@ class SliverClient(BaseClient):
         :type timeout: int, optional
         """
         website = models.clientpb.Website(name=name)
-        await self._stub.WebsiteRemove(website, timeout=timeout)
+        await self.pydantic_stub.WebsiteRemove(website, timeout=timeout)
 
     async def add_website_content(
         self,
@@ -846,7 +970,7 @@ class SliverClient(BaseClient):
         )
 
         web_add = models.clientpb.WebsiteAddContent(name=name, contents={web_path: web})
-        return await self._stub.WebsiteAddContent(web_add, timeout=timeout)
+        return await self.pydantic_stub.WebsiteAddContent(web_add, timeout=timeout)
 
     async def update_website_content(
         self,
@@ -881,10 +1005,12 @@ class SliverClient(BaseClient):
         web_update = models.clientpb.WebsiteAddContent(
             name=name, contents={web_path: web}
         )
-        return await self._stub.WebsiteUpdateContent(web_update, timeout=timeout)
+        return await self.pydantic_stub.WebsiteUpdateContent(
+            web_update, timeout=timeout
+        )
 
     async def remove_website_content(
-        self, name: str, paths: list[str], timeout=TIMEOUT
+        self, name: str, paths: list[str], timeout: int = TIMEOUT
     ) -> models.clientpb.Website:
         """Remove content from a specific website
 
@@ -898,4 +1024,4 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.Website
         """
         web = models.clientpb.WebsiteRemoveContent(name=name, paths=paths)
-        return await self._stub.WebsiteRemoveContent(web, timeout=timeout)
+        return await self.pydantic_stub.WebsiteRemoveContent(web, timeout=timeout)

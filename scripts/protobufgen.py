@@ -12,7 +12,7 @@ from grpc_tools import protoc
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PROTO_DIR = ROOT_DIR / "sliver" / "protobuf"
-OUT_DIR = ROOT_DIR / "src" / "sliver" / "pb"
+OUT_DIR = ROOT_DIR / "src" / "sliver" / "_pb"
 
 PROTO_FILES = (
     PROTO_DIR / "commonpb" / "common.proto",

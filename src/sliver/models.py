@@ -1,6 +1,6 @@
 """Descriptor-driven Pydantic models for Sliver's protobuf API.
 
-The classes in this module are created from the descriptors in ``sliver.pb`` at
+The classes in this module are created from private wire descriptors at
 import time.  They deliberately keep protobuf generation and application models
 separate: generated ``*_pb2.py`` files remain the wire implementation, while
 the models exposed here provide validation, ergonomic field names, and normal
@@ -16,11 +16,13 @@ import re
 from collections.abc import Mapping
 from enum import IntEnum
 from types import MappingProxyType
-from typing import Annotated, Any, ClassVar, ForwardRef, Optional, TypeVar, cast
+from typing import Annotated, Any, ForwardRef, NamedTuple, Optional, TypeVar, cast
 
-from google.protobuf import message_factory
-from google.protobuf.descriptor import Descriptor, EnumDescriptor, FieldDescriptor
-from google.protobuf.message import Message
+from google.protobuf import message_factory as _message_factory
+from google.protobuf.descriptor import Descriptor as _Descriptor
+from google.protobuf.descriptor import EnumDescriptor as _EnumDescriptor
+from google.protobuf.descriptor import FieldDescriptor as _FieldDescriptor
+from google.protobuf.message import Message as _Message
 from pydantic import (
     AliasChoices,
     BaseModel,
@@ -40,11 +42,9 @@ class ProtobufEnum(IntEnum):
     synthetic enum member rather than being rejected during validation.
     """
 
-    __protobuf_descriptor__: ClassVar[EnumDescriptor | None] = None
-
     @classmethod
     def _missing_(cls, value: object) -> ProtobufEnum | None:
-        descriptor = cls.__protobuf_descriptor__
+        descriptor = _ENUM_DESCRIPTOR_BY_MODEL.get(cls)
         syntax = getattr(descriptor.file, "syntax", "proto3") if descriptor else None
         if descriptor is None or syntax == "proto2" or not isinstance(value, int):
             return None
@@ -70,42 +70,14 @@ class ProtobufModel(BaseModel):
         validate_assignment=True,
     )
 
-    __protobuf_descriptor__: ClassVar[Descriptor | None] = None
-    __protobuf_class__: ClassVar[type[Message] | None] = None
-    __protobuf_to_python_fields__: ClassVar[Mapping[str, str]] = MappingProxyType({})
-
-    @classmethod
-    def from_protobuf(cls: type[_ModelT], message: Message) -> _ModelT:
-        """Build this Pydantic model from its corresponding protobuf message."""
-
-        expected = cls.__protobuf_class__
-        if expected is None or not isinstance(message, expected):
-            expected_name = (
-                cls.__protobuf_descriptor__.full_name
-                if cls.__protobuf_descriptor__ is not None
-                else cls.__name__
-            )
-            actual_name = getattr(
-                getattr(message, "DESCRIPTOR", None), "full_name", None
-            )
-            raise TypeError(
-                f"{cls.__name__}.from_protobuf() expected {expected_name!r}, "
-                f"got {actual_name or type(message).__name__!r}"
-            )
-        return _model_from_protobuf(cls, message)
-
-    def to_protobuf(self) -> Message:
-        """Convert this model to a new generated protobuf message instance."""
-
-        return _model_to_protobuf(self)
-
     @model_validator(mode="after")
     def _validate_oneofs(self) -> ProtobufModel:
-        descriptor = self.__protobuf_descriptor__
-        if descriptor is None:
+        binding = _MODEL_BINDINGS.get(type(self))
+        if binding is None:
             return self
 
-        field_names = self.__protobuf_to_python_fields__
+        descriptor = binding.descriptor
+        field_names = binding.protobuf_to_python_fields
         for oneof in descriptor.oneofs:
             active = [
                 field.name
@@ -147,28 +119,29 @@ class ModelNamespace:
 
 
 _MODEL_REGISTRY: dict[str, type[ProtobufModel]] = {}
-_MODEL_BY_DESCRIPTOR: dict[Descriptor, type[ProtobufModel]] = {}
-_MODEL_BY_PROTOBUF_CLASS: dict[type[Message], type[ProtobufModel]] = {}
+_MODEL_BY_DESCRIPTOR: dict[_Descriptor, type[ProtobufModel]] = {}
+_MODEL_BY_PROTOBUF_CLASS: dict[type[_Message], type[ProtobufModel]] = {}
 _ENUM_REGISTRY: dict[str, type[ProtobufEnum]] = {}
-_ENUM_BY_DESCRIPTOR: dict[EnumDescriptor, type[ProtobufEnum]] = {}
+_ENUM_BY_DESCRIPTOR: dict[_EnumDescriptor, type[ProtobufEnum]] = {}
+_ENUM_DESCRIPTOR_BY_MODEL: dict[type[ProtobufEnum], _EnumDescriptor] = {}
 _PACKAGE_MEMBERS: dict[str, dict[str, Any]] = {}
 _PACKAGE_NAMESPACES: dict[str, ModelNamespace] = {}
-_BUILDING: set[Descriptor] = set()
+_BUILDING: set[_Descriptor] = set()
 _FORWARD_NAMESPACE: dict[str, Any] = {}
 
-# Public read-only views stay live if a caller registers a descriptor from a
-# separate DescriptorPool through ``get_pydantic_model()``.
+
+class _ModelBinding(NamedTuple):
+    descriptor: _Descriptor
+    protobuf_class: type[_Message]
+    protobuf_to_python_fields: Mapping[str, str]
+
+
+_MODEL_BINDINGS: dict[type[ProtobufModel], _ModelBinding] = {}
+
+# Public read-only views contain only Pydantic and standard Python types. The
+# descriptor/class lookup tables remain private to the wire adapter.
 MODEL_REGISTRY: Mapping[str, type[ProtobufModel]] = MappingProxyType(_MODEL_REGISTRY)
-MODEL_BY_DESCRIPTOR: Mapping[Descriptor, type[ProtobufModel]] = MappingProxyType(
-    _MODEL_BY_DESCRIPTOR
-)
-MODEL_BY_PROTOBUF_CLASS: Mapping[type[Message], type[ProtobufModel]] = MappingProxyType(
-    _MODEL_BY_PROTOBUF_CLASS
-)
 ENUM_REGISTRY: Mapping[str, type[ProtobufEnum]] = MappingProxyType(_ENUM_REGISTRY)
-ENUM_BY_DESCRIPTOR: Mapping[EnumDescriptor, type[ProtobufEnum]] = MappingProxyType(
-    _ENUM_BY_DESCRIPTOR
-)
 PACKAGE_NAMESPACES: Mapping[str, ModelNamespace] = MappingProxyType(_PACKAGE_NAMESPACES)
 
 
@@ -188,21 +161,21 @@ def _python_field_name(protobuf_name: str) -> str:
     return name
 
 
-def _forward_name(descriptor: Descriptor) -> str:
+def _forward_name(descriptor: _Descriptor) -> str:
     return "_protobuf_model_" + _NON_IDENTIFIER.sub("_", descriptor.full_name)
 
 
-def _message_class(descriptor: Descriptor) -> type[Message]:
-    get_message_class = getattr(message_factory, "GetMessageClass", None)
+def _message_class(descriptor: _Descriptor) -> type[_Message]:
+    get_message_class = getattr(_message_factory, "GetMessageClass", None)
     if get_message_class is not None:
-        return cast(type[Message], get_message_class(descriptor))
+        return cast(type[_Message], get_message_class(descriptor))
 
     # Compatibility with protobuf runtimes predating GetMessageClass().
-    factory = message_factory.MessageFactory()
-    return cast(type[Message], factory.GetPrototype(descriptor))
+    factory = _message_factory.MessageFactory()
+    return cast(type[_Message], factory.GetPrototype(descriptor))
 
 
-def _enum_model(enum_descriptor: EnumDescriptor) -> type[ProtobufEnum]:
+def _enum_model(enum_descriptor: _EnumDescriptor) -> type[ProtobufEnum]:
     existing = _ENUM_BY_DESCRIPTOR.get(enum_descriptor)
     if existing is not None:
         return existing
@@ -216,7 +189,7 @@ def _enum_model(enum_descriptor: EnumDescriptor) -> type[ProtobufEnum]:
             type=ProtobufEnum,
         ),
     )
-    enum_model.__protobuf_descriptor__ = enum_descriptor
+    _ENUM_DESCRIPTOR_BY_MODEL[enum_model] = enum_descriptor
     enum_model.__doc__ = f"Pydantic enum for ``{enum_descriptor.full_name}``."
     _ENUM_BY_DESCRIPTOR[enum_descriptor] = enum_model
     _ENUM_REGISTRY[enum_descriptor.full_name] = enum_model
@@ -225,73 +198,73 @@ def _enum_model(enum_descriptor: EnumDescriptor) -> type[ProtobufEnum]:
 
 
 _SCALAR_TYPES: dict[int, type[Any]] = {
-    FieldDescriptor.TYPE_DOUBLE: float,
-    FieldDescriptor.TYPE_FLOAT: float,
-    FieldDescriptor.TYPE_INT64: int,
-    FieldDescriptor.TYPE_UINT64: int,
-    FieldDescriptor.TYPE_INT32: int,
-    FieldDescriptor.TYPE_FIXED64: int,
-    FieldDescriptor.TYPE_FIXED32: int,
-    FieldDescriptor.TYPE_BOOL: bool,
-    FieldDescriptor.TYPE_STRING: str,
-    FieldDescriptor.TYPE_BYTES: bytes,
-    FieldDescriptor.TYPE_UINT32: int,
-    FieldDescriptor.TYPE_SFIXED32: int,
-    FieldDescriptor.TYPE_SFIXED64: int,
-    FieldDescriptor.TYPE_SINT32: int,
-    FieldDescriptor.TYPE_SINT64: int,
+    _FieldDescriptor.TYPE_DOUBLE: float,
+    _FieldDescriptor.TYPE_FLOAT: float,
+    _FieldDescriptor.TYPE_INT64: int,
+    _FieldDescriptor.TYPE_UINT64: int,
+    _FieldDescriptor.TYPE_INT32: int,
+    _FieldDescriptor.TYPE_FIXED64: int,
+    _FieldDescriptor.TYPE_FIXED32: int,
+    _FieldDescriptor.TYPE_BOOL: bool,
+    _FieldDescriptor.TYPE_STRING: str,
+    _FieldDescriptor.TYPE_BYTES: bytes,
+    _FieldDescriptor.TYPE_UINT32: int,
+    _FieldDescriptor.TYPE_SFIXED32: int,
+    _FieldDescriptor.TYPE_SFIXED64: int,
+    _FieldDescriptor.TYPE_SINT32: int,
+    _FieldDescriptor.TYPE_SINT64: int,
 }
 
 _INTEGER_BOUNDS: dict[int, tuple[int, int]] = {
-    FieldDescriptor.TYPE_INT32: (-(2**31), (2**31) - 1),
-    FieldDescriptor.TYPE_SINT32: (-(2**31), (2**31) - 1),
-    FieldDescriptor.TYPE_SFIXED32: (-(2**31), (2**31) - 1),
-    FieldDescriptor.TYPE_UINT32: (0, (2**32) - 1),
-    FieldDescriptor.TYPE_FIXED32: (0, (2**32) - 1),
-    FieldDescriptor.TYPE_INT64: (-(2**63), (2**63) - 1),
-    FieldDescriptor.TYPE_SINT64: (-(2**63), (2**63) - 1),
-    FieldDescriptor.TYPE_SFIXED64: (-(2**63), (2**63) - 1),
-    FieldDescriptor.TYPE_UINT64: (0, (2**64) - 1),
-    FieldDescriptor.TYPE_FIXED64: (0, (2**64) - 1),
+    _FieldDescriptor.TYPE_INT32: (-(2**31), (2**31) - 1),
+    _FieldDescriptor.TYPE_SINT32: (-(2**31), (2**31) - 1),
+    _FieldDescriptor.TYPE_SFIXED32: (-(2**31), (2**31) - 1),
+    _FieldDescriptor.TYPE_UINT32: (0, (2**32) - 1),
+    _FieldDescriptor.TYPE_FIXED32: (0, (2**32) - 1),
+    _FieldDescriptor.TYPE_INT64: (-(2**63), (2**63) - 1),
+    _FieldDescriptor.TYPE_SINT64: (-(2**63), (2**63) - 1),
+    _FieldDescriptor.TYPE_SFIXED64: (-(2**63), (2**63) - 1),
+    _FieldDescriptor.TYPE_UINT64: (0, (2**64) - 1),
+    _FieldDescriptor.TYPE_FIXED64: (0, (2**64) - 1),
 }
 
 
-def _is_map(field: FieldDescriptor) -> bool:
+def _is_map(field: _FieldDescriptor) -> bool:
     return (
         _is_repeated(field)
-        and field.type == FieldDescriptor.TYPE_MESSAGE
+        and field.type == _FieldDescriptor.TYPE_MESSAGE
         and field.message_type is not None
         and field.message_type.GetOptions().map_entry
     )
 
 
-def _is_repeated(field: FieldDescriptor) -> bool:
+def _is_repeated(field: _FieldDescriptor) -> bool:
     is_repeated = getattr(field, "is_repeated", None)
     if is_repeated is not None:
         return bool(is_repeated)
-    return field.label == FieldDescriptor.LABEL_REPEATED
+    return field.label == _FieldDescriptor.LABEL_REPEATED
 
 
-def _is_required(field: FieldDescriptor) -> bool:
+def _is_required(field: _FieldDescriptor) -> bool:
     is_required = getattr(field, "is_required", None)
     if is_required is not None:
         return bool(is_required)
-    return field.label == FieldDescriptor.LABEL_REQUIRED
+    return field.label == _FieldDescriptor.LABEL_REQUIRED
 
 
-def _has_presence(field: FieldDescriptor) -> bool:
+def _has_presence(field: _FieldDescriptor) -> bool:
     has_presence = getattr(field, "has_presence", None)
     if has_presence is not None:
         return bool(has_presence)
     return (
-        field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP)
+        field.type in (_FieldDescriptor.TYPE_MESSAGE, _FieldDescriptor.TYPE_GROUP)
         or field.containing_oneof is not None
         or getattr(field.file, "syntax", "proto3") == "proto2"
     )
 
 
-def _singular_annotation(field: FieldDescriptor) -> Any:
-    if field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP):
+def _singular_annotation(field: _FieldDescriptor) -> Any:
+    if field.type in (_FieldDescriptor.TYPE_MESSAGE, _FieldDescriptor.TYPE_GROUP):
         assert field.message_type is not None
         existing = _MODEL_BY_DESCRIPTOR.get(field.message_type)
         if existing is not None:
@@ -299,7 +272,7 @@ def _singular_annotation(field: FieldDescriptor) -> Any:
         if field.message_type in _BUILDING:
             return ForwardRef(_forward_name(field.message_type))
         return _build_model(field.message_type)
-    if field.type == FieldDescriptor.TYPE_ENUM:
+    if field.type == _FieldDescriptor.TYPE_ENUM:
         assert field.enum_type is not None
         return _enum_model(field.enum_type)
     if field.type in _INTEGER_BOUNDS:
@@ -313,7 +286,7 @@ def _singular_annotation(field: FieldDescriptor) -> Any:
         ) from exc
 
 
-def _field_annotation(field: FieldDescriptor) -> Any:
+def _field_annotation(field: _FieldDescriptor) -> Any:
     if _is_map(field):
         assert field.message_type is not None
         key_field = field.message_type.fields_by_name["key"]
@@ -331,7 +304,7 @@ def _field_annotation(field: FieldDescriptor) -> Any:
     return annotation
 
 
-def _field_info(field: FieldDescriptor, annotation: Any) -> Any:
+def _field_info(field: _FieldDescriptor, annotation: Any) -> Any:
     aliases = list(dict.fromkeys((field.name, field.json_name)))
     metadata: dict[str, Any] = {
         "serialization_alias": field.name,
@@ -350,7 +323,7 @@ def _field_info(field: FieldDescriptor, annotation: Any) -> Any:
         return annotation, Field(..., **metadata)
     if _has_presence(field):
         return annotation, Field(None, **metadata)
-    if field.type == FieldDescriptor.TYPE_ENUM:
+    if field.type == _FieldDescriptor.TYPE_ENUM:
         assert field.enum_type is not None
         default = _enum_model(field.enum_type)(field.default_value)
     else:
@@ -358,7 +331,7 @@ def _field_info(field: FieldDescriptor, annotation: Any) -> Any:
     return annotation, Field(default, **metadata)
 
 
-def _build_model(descriptor: Descriptor) -> type[ProtobufModel]:
+def _build_model(descriptor: _Descriptor) -> type[ProtobufModel]:
     existing = _MODEL_BY_DESCRIPTOR.get(descriptor)
     if existing is not None:
         return existing
@@ -389,9 +362,11 @@ def _build_model(descriptor: Descriptor) -> type[ProtobufModel]:
         _BUILDING.remove(descriptor)
 
     protobuf_class = _message_class(descriptor)
-    model.__protobuf_descriptor__ = descriptor
-    model.__protobuf_class__ = protobuf_class
-    model.__protobuf_to_python_fields__ = MappingProxyType(protobuf_to_python)
+    _MODEL_BINDINGS[model] = _ModelBinding(
+        descriptor,
+        protobuf_class,
+        MappingProxyType(protobuf_to_python),
+    )
     model.__doc__ = f"Pydantic model for ``{descriptor.full_name}``."
 
     _MODEL_BY_DESCRIPTOR[descriptor] = model
@@ -403,7 +378,7 @@ def _build_model(descriptor: Descriptor) -> type[ProtobufModel]:
 
 
 def _publish_package_member(
-    descriptor: Descriptor | EnumDescriptor, member: Any
+    descriptor: _Descriptor | _EnumDescriptor, member: Any
 ) -> None:
     if descriptor.containing_type is not None:
         return
@@ -418,7 +393,7 @@ def _publish_package_member(
             globals()[attribute] = namespace
 
 
-def _walk_messages(descriptor: Descriptor) -> list[Descriptor]:
+def _walk_messages(descriptor: _Descriptor) -> list[_Descriptor]:
     messages = [descriptor]
     for nested in descriptor.nested_types:
         if not nested.GetOptions().map_entry:
@@ -426,7 +401,7 @@ def _walk_messages(descriptor: Descriptor) -> list[Descriptor]:
     return messages
 
 
-def _walk_enums(descriptor: Descriptor) -> list[EnumDescriptor]:
+def _walk_enums(descriptor: _Descriptor) -> list[_EnumDescriptor]:
     enums = list(descriptor.enum_types)
     for nested in descriptor.nested_types:
         if not nested.GetOptions().map_entry:
@@ -469,11 +444,11 @@ def _rebuild_models() -> None:
 
 
 def _load_generated_models() -> None:
-    from . import pb
+    from . import _pb
 
     module_names = sorted(
         module.name
-        for module in pkgutil.walk_packages(pb.__path__, f"{pb.__name__}.")
+        for module in pkgutil.walk_packages(_pb.__path__, f"{_pb.__name__}.")
         if module.name.endswith("_pb2")
     )
     file_descriptors = []
@@ -495,13 +470,13 @@ def _load_generated_models() -> None:
 
 
 def get_pydantic_model(
-    source: str | Descriptor | type[Message] | Message | type[ProtobufModel],
+    source: str | type[ProtobufModel],
 ) -> type[ProtobufModel]:
-    """Return the stable Pydantic class associated with a protobuf type.
+    """Return a generated Pydantic class by name.
 
-    ``source`` may be a protobuf full name, descriptor, generated message class,
-    message instance, or an already generated Pydantic model class.  A unique
-    unqualified protobuf message name is accepted as a convenience.
+    A fully-qualified model name, a unique unqualified name, or an existing
+    :class:`ProtobufModel` subclass is accepted. Wire descriptors and generated
+    protobuf classes are deliberately not part of this public API.
     """
 
     if isinstance(source, type) and issubclass(source, ProtobufModel):
@@ -526,15 +501,20 @@ def get_pydantic_model(
             )
         raise KeyError(f"unknown protobuf message {source!r}")
 
-    if isinstance(source, Descriptor):
+    raise TypeError("source must be a model name or ProtobufModel class")
+
+
+def _get_pydantic_model(
+    source: _Descriptor | type[_Message] | _Message,
+) -> type[ProtobufModel]:
+    """Return or build the Pydantic model used for an internal wire type."""
+
+    if isinstance(source, _Descriptor):
         descriptor = source
     else:
         descriptor = getattr(source, "DESCRIPTOR", None)
-        if not isinstance(descriptor, Descriptor):
-            raise TypeError(
-                "source must be a protobuf name, descriptor, Message class/instance, "
-                "or ProtobufModel class"
-            )
+        if not isinstance(descriptor, _Descriptor):
+            raise TypeError("source must be a protobuf descriptor, class, or message")
 
     model = _MODEL_BY_DESCRIPTOR.get(descriptor)
     if model is None:
@@ -544,17 +524,17 @@ def get_pydantic_model(
     return model
 
 
-def _from_protobuf_value(field: FieldDescriptor, value: Any) -> Any:
-    if field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP):
+def _from_protobuf_value(field: _FieldDescriptor, value: Any) -> Any:
+    if field.type in (_FieldDescriptor.TYPE_MESSAGE, _FieldDescriptor.TYPE_GROUP):
         assert field.message_type is not None
-        return get_pydantic_model(field.message_type).from_protobuf(value)
-    if field.type == FieldDescriptor.TYPE_ENUM:
+        return _model_from_protobuf(_get_pydantic_model(field.message_type), value)
+    if field.type == _FieldDescriptor.TYPE_ENUM:
         assert field.enum_type is not None
         return _enum_model(field.enum_type)(value)
     return value
 
 
-def _from_protobuf_field(field: FieldDescriptor, value: Any) -> Any:
+def _from_protobuf_field(field: _FieldDescriptor, value: Any) -> Any:
     if _is_map(field):
         assert field.message_type is not None
         value_field = field.message_type.fields_by_name["value"]
@@ -566,8 +546,16 @@ def _from_protobuf_field(field: FieldDescriptor, value: Any) -> Any:
     return _from_protobuf_value(field, value)
 
 
-def _model_from_protobuf(model_class: type[_ModelT], message: Message) -> _ModelT:
-    field_names = model_class.__protobuf_to_python_fields__
+def _model_from_protobuf(model_class: type[_ModelT], message: _Message) -> _ModelT:
+    binding = _MODEL_BINDINGS.get(model_class)
+    if binding is None or not isinstance(message, binding.protobuf_class):
+        expected_name = binding.descriptor.full_name if binding else model_class.__name__
+        actual_name = getattr(getattr(message, "DESCRIPTOR", None), "full_name", None)
+        raise TypeError(
+            f"internal conversion expected {expected_name!r}, "
+            f"got {actual_name or type(message).__name__!r}"
+        )
+    field_names = binding.protobuf_to_python_fields
     values = {
         field_names[field.name]: _from_protobuf_field(field, value)
         for field, value in message.ListFields()
@@ -575,13 +563,13 @@ def _model_from_protobuf(model_class: type[_ModelT], message: Message) -> _Model
     return model_class.model_validate(values)
 
 
-def _to_protobuf_value(field: FieldDescriptor, value: Any) -> Any:
-    if field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP):
+def _to_protobuf_value(field: _FieldDescriptor, value: Any) -> Any:
+    if field.type in (_FieldDescriptor.TYPE_MESSAGE, _FieldDescriptor.TYPE_GROUP):
         if not isinstance(value, ProtobufModel):
             raise TypeError(
                 f"{field.full_name} requires ProtobufModel, got {type(value).__name__}"
             )
-        message = value.to_protobuf()
+        message = _model_to_protobuf(value)
         assert field.message_type is not None
         if message.DESCRIPTOR.full_name != field.message_type.full_name:
             raise TypeError(
@@ -589,19 +577,19 @@ def _to_protobuf_value(field: FieldDescriptor, value: Any) -> Any:
                 f"got {message.DESCRIPTOR.full_name}"
             )
         return message
-    if field.type == FieldDescriptor.TYPE_ENUM:
+    if field.type == _FieldDescriptor.TYPE_ENUM:
         return int(value)
     return value
 
 
-def _set_protobuf_field(message: Message, field: FieldDescriptor, value: Any) -> None:
+def _set_protobuf_field(message: _Message, field: _FieldDescriptor, value: Any) -> None:
     target = getattr(message, field.name)
     if _is_map(field):
         assert field.message_type is not None
         value_field = field.message_type.fields_by_name["value"]
         if value_field.type in (
-            FieldDescriptor.TYPE_MESSAGE,
-            FieldDescriptor.TYPE_GROUP,
+            _FieldDescriptor.TYPE_MESSAGE,
+            _FieldDescriptor.TYPE_GROUP,
         ):
             for key, item in value.items():
                 target[key].CopyFrom(_to_protobuf_value(value_field, item))
@@ -610,29 +598,29 @@ def _set_protobuf_field(message: Message, field: FieldDescriptor, value: Any) ->
                 target[key] = _to_protobuf_value(value_field, item)
         return
     if _is_repeated(field):
-        if field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP):
+        if field.type in (_FieldDescriptor.TYPE_MESSAGE, _FieldDescriptor.TYPE_GROUP):
             for item in value:
                 target.add().CopyFrom(_to_protobuf_value(field, item))
         else:
             target.extend(_to_protobuf_value(field, item) for item in value)
         return
-    if field.type in (FieldDescriptor.TYPE_MESSAGE, FieldDescriptor.TYPE_GROUP):
+    if field.type in (_FieldDescriptor.TYPE_MESSAGE, _FieldDescriptor.TYPE_GROUP):
         target.CopyFrom(_to_protobuf_value(field, value))
     else:
         setattr(message, field.name, _to_protobuf_value(field, value))
 
 
-def _model_to_protobuf(model: ProtobufModel) -> Message:
-    descriptor = model.__protobuf_descriptor__
-    protobuf_class = model.__protobuf_class__
-    if descriptor is None or protobuf_class is None:
+def _model_to_protobuf(model: ProtobufModel) -> _Message:
+    binding = _MODEL_BINDINGS.get(type(model))
+    if binding is None:
         raise TypeError(f"{type(model).__name__} is not bound to a protobuf descriptor")
+    descriptor = binding.descriptor
 
     # Recheck here in case model_construct() was used to bypass Pydantic's
     # validators.
     model._validate_oneofs()
-    message = protobuf_class()
-    field_names = model.__protobuf_to_python_fields__
+    message = binding.protobuf_class()
+    field_names = binding.protobuf_to_python_fields
     for field in descriptor.fields:
         python_name = field_names[field.name]
         value = getattr(model, python_name)
@@ -652,49 +640,44 @@ def _model_to_protobuf(model: ProtobufModel) -> Message:
     return message
 
 
-def protobuf_to_pydantic(value: Any) -> Any:
-    """Recursively replace protobuf message leaves with Pydantic models."""
+def _protobuf_to_pydantic(value: Any) -> Any:
+    """Recursively convert wire messages at the private gRPC boundary."""
 
-    if isinstance(value, Message):
-        return get_pydantic_model(value).from_protobuf(value)
+    if isinstance(value, _Message):
+        model_class = _get_pydantic_model(value)
+        return _model_from_protobuf(model_class, value)
     if isinstance(value, list):
-        return [protobuf_to_pydantic(item) for item in value]
+        return [_protobuf_to_pydantic(item) for item in value]
     if isinstance(value, tuple):
-        return tuple(protobuf_to_pydantic(item) for item in value)
+        return tuple(_protobuf_to_pydantic(item) for item in value)
     if isinstance(value, dict):
-        return {key: protobuf_to_pydantic(item) for key, item in value.items()}
+        return {key: _protobuf_to_pydantic(item) for key, item in value.items()}
     return value
 
 
-def pydantic_to_protobuf(value: Any) -> Any:
-    """Recursively replace descriptor-derived Pydantic model leaves with protobuf."""
+def _model_from_bytes(
+    model_class: type[_ModelT], serialized: bytes | bytearray | memoryview
+) -> _ModelT:
+    """Deserialize one internal wire payload directly into a Pydantic model."""
 
-    if isinstance(value, ProtobufModel):
-        return value.to_protobuf()
-    if isinstance(value, list):
-        return [pydantic_to_protobuf(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(pydantic_to_protobuf(item) for item in value)
-    if isinstance(value, dict):
-        return {key: pydantic_to_protobuf(item) for key, item in value.items()}
-    return value
+    binding = _MODEL_BINDINGS.get(model_class)
+    if binding is None:
+        raise TypeError(f"{model_class.__name__} has no internal wire binding")
+    message = binding.protobuf_class()
+    message.ParseFromString(bytes(serialized))
+    return _model_from_protobuf(model_class, message)
 
 
 _load_generated_models()
 
 
 __all__ = [
-    "ENUM_BY_DESCRIPTOR",
     "ENUM_REGISTRY",
-    "MODEL_BY_DESCRIPTOR",
-    "MODEL_BY_PROTOBUF_CLASS",
     "MODEL_REGISTRY",
     "PACKAGE_NAMESPACES",
     "ModelNamespace",
     "ProtobufEnum",
     "ProtobufModel",
     "get_pydantic_model",
-    "protobuf_to_pydantic",
-    "pydantic_to_protobuf",
     *sorted(package.replace(".", "_") or "root" for package in _PACKAGE_NAMESPACES),
 ]

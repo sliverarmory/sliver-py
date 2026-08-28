@@ -16,19 +16,24 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
+from typing import TypeVar
+
 import grpc
 
 from . import models
+from ._protocols import RequestRoutedModel
 from ._rpc import PydanticSliverRPCStub
 from .interactive import BaseInteractiveCommands
-from .models import ProtobufModel, protobuf_to_pydantic
+from .models import ProtobufModel
+
+_RequestT = TypeVar("_RequestT", bound=RequestRoutedModel)
+_ResultT = TypeVar("_ResultT", bound=ProtobufModel)
 
 
 class BaseSession:
     """Base class for Session objects.
 
-    :param session: Pydantic session model. A raw protobuf message is accepted
-        during the v0.1 transition.
+    :param session: Pydantic session model.
     :type session: models.clientpb.Session
     :param channel: A gRPC channel.
     :type channel: grpc.Channel
@@ -41,21 +46,49 @@ class BaseSession:
         session: models.clientpb.Session,
         channel: grpc.aio.Channel,
         timeout: int = 60,
-    ):
+    ) -> None:
+        if not isinstance(session, models.clientpb.Session):
+            raise TypeError(
+                "session must be a models.clientpb.Session Pydantic model"
+            )
         self._channel = channel
-        self._session = protobuf_to_pydantic(session)
+        self._session = session.model_copy(deep=True)
         self._stub = PydanticSliverRPCStub(channel)
         self.timeout = timeout
 
-    def _request(self, pb: ProtobufModel) -> ProtobufModel:
+    def _request(self, model: _RequestT) -> _RequestT:
         """Attach this session's routing metadata to a command request.
 
-        ``pb`` is any Pydantic command model with a ``request`` field.
+        ``model`` is any Pydantic command model with a ``request`` field.
         """
-        pb.request = models.commonpb.Request(
+        model.request = models.commonpb.Request(
             session_id=self._session.id, timeout=self.timeout - 1
         )
-        return pb
+        return model
+
+    async def _execute(
+        self,
+        rpc_name: str,
+        request: RequestRoutedModel,
+        result_type: type[_ResultT],
+    ) -> _ResultT:
+        """Execute a session command and validate its Pydantic result."""
+
+        if not isinstance(request, ProtobufModel):
+            raise TypeError("interactive requests must be Pydantic models")
+        result = await getattr(self._stub, rpc_name)(request, timeout=self.timeout)
+        if not isinstance(result, result_type):
+            raise TypeError(
+                f"{rpc_name} returned {type(result).__name__}, "
+                f"expected {result_type.__name__}"
+            )
+        return result
+
+    @property
+    def session(self) -> models.clientpb.Session:
+        """A copy of the complete Pydantic session model."""
+
+        return self._session.model_copy(deep=True)
 
     @property
     def session_id(self) -> str:

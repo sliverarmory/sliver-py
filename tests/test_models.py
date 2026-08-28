@@ -9,17 +9,16 @@ from google.protobuf.descriptor import FieldDescriptor
 from pydantic import ValidationError
 
 from sliver import models
+from sliver._pb.commonpb import common_pb2
 from sliver.models import (
-    MODEL_BY_DESCRIPTOR,
-    MODEL_BY_PROTOBUF_CLASS,
     MODEL_REGISTRY,
     ProtobufEnum,
     ProtobufModel,
+    _get_pydantic_model,
+    _model_to_protobuf,
+    _protobuf_to_pydantic,
     get_pydantic_model,
-    protobuf_to_pydantic,
-    pydantic_to_protobuf,
 )
-from sliver.pb.commonpb import common_pb2
 
 
 def _add_field(
@@ -184,7 +183,7 @@ def _feature_message_type() -> type[Any]:
 def test_generated_sliver_models_use_snake_case_and_protobuf_aliases() -> None:
     message = common_pb2.File(Name="payload.bin", Data=b"\x00\xff")
 
-    model = protobuf_to_pydantic(message)
+    model = _protobuf_to_pydantic(message)
 
     assert isinstance(model, models.commonpb.File)
     assert model.name == "payload.bin"
@@ -196,7 +195,9 @@ def test_generated_sliver_models_use_snake_case_and_protobuf_aliases() -> None:
 
     alias_model = models.commonpb.File(Name="alias.bin", Data=b"data")
     assert alias_model.name == "alias.bin"
-    assert alias_model.to_protobuf() == common_pb2.File(Name="alias.bin", Data=b"data")
+    assert _model_to_protobuf(alias_model) == common_pb2.File(
+        Name="alias.bin", Data=b"data"
+    )
 
 
 def test_generated_models_validate_protobuf_integer_ranges() -> None:
@@ -211,18 +212,25 @@ def test_generated_models_validate_protobuf_integer_ranges() -> None:
         models.commonpb.Process(pid=2**31)
 
 
-def test_registry_uses_descriptor_and_generated_class_identity() -> None:
+def test_public_registry_and_lookup_only_expose_pydantic_types() -> None:
     model_class = models.commonpb.File
 
     assert MODEL_REGISTRY["commonpb.File"] is model_class
-    assert MODEL_BY_DESCRIPTOR[common_pb2.File.DESCRIPTOR] is model_class
-    assert MODEL_BY_PROTOBUF_CLASS[common_pb2.File] is model_class
     assert get_pydantic_model("commonpb.File") is model_class
     assert get_pydantic_model("File") is model_class
-    assert get_pydantic_model(common_pb2.File.DESCRIPTOR) is model_class
-    assert get_pydantic_model(common_pb2.File) is model_class
-    assert get_pydantic_model(common_pb2.File()) is model_class
     assert get_pydantic_model(model_class) is model_class
+    assert all(issubclass(value, ProtobufModel) for value in MODEL_REGISTRY.values())
+
+
+@pytest.mark.parametrize(
+    "wire_type",
+    [common_pb2.File.DESCRIPTOR, common_pb2.File, common_pb2.File()],
+)
+def test_public_model_lookup_rejects_wire_types(wire_type: object) -> None:
+    with pytest.raises(TypeError, match="model name or ProtobufModel class"):
+        get_pydantic_model(wire_type)  # type: ignore[arg-type]
+
+    assert _get_pydantic_model(wire_type) is models.commonpb.File
 
 
 def test_dynamic_descriptor_round_trip_covers_composite_field_kinds() -> None:
@@ -239,8 +247,8 @@ def test_dynamic_descriptor_round_trip_covers_composite_field_kinds() -> None:
     message.ChildrenByName["primary"].ValueText = "mapped"
     message.Next.SetInParent()
 
-    model_class = get_pydantic_model(message_type.DESCRIPTOR)
-    model = protobuf_to_pydantic(message)
+    model_class = _get_pydantic_model(message_type.DESCRIPTOR)
+    model = _protobuf_to_pydantic(message)
 
     assert isinstance(model, model_class)
     assert isinstance(model, ProtobufModel)
@@ -257,38 +265,36 @@ def test_dynamic_descriptor_round_trip_covers_composite_field_kinds() -> None:
     assert model.next.model_fields_set == set()
     assert model.numbers == [1, 2, 3]
     assert model.bytes_by_name == {"raw": b"\x01\x02"}
-    assert model.to_protobuf() == message
+    assert _model_to_protobuf(model) == message
 
-    assert MODEL_BY_DESCRIPTOR[message_type.DESCRIPTOR] is model_class
-    assert MODEL_BY_PROTOBUF_CLASS[message_type] is model_class
     assert MODEL_REGISTRY["featurepb.Feature"] is model_class
     assert models.PACKAGE_NAMESPACES["featurepb"].Feature is model_class
 
 
 def test_presence_oneof_and_open_enum_validation() -> None:
     message_type = _feature_message_type()
-    model_class = get_pydantic_model(message_type.DESCRIPTOR)
+    model_class = _get_pydantic_model(message_type.DESCRIPTOR)
 
     empty = model_class()
     assert empty.optional_count is None
     assert empty.next is None
-    empty_message = empty.to_protobuf()
+    empty_message = _model_to_protobuf(empty)
     assert not empty_message.HasField("OptionalCount")
     assert not empty_message.HasField("Next")
 
     present_default = model_class(OptionalCount=0)
-    assert present_default.to_protobuf().HasField("OptionalCount")
+    assert _model_to_protobuf(present_default).HasField("OptionalCount")
 
     unknown_enum = model_class(State=31337)
     assert isinstance(unknown_enum.state, ProtobufEnum)
     assert unknown_enum.state.name == "UNRECOGNIZED_31337"
-    assert unknown_enum.to_protobuf().State == 31337
+    assert _model_to_protobuf(unknown_enum).State == 31337
 
     with pytest.raises(ValidationError, match="oneof"):
         model_class(TextValue="text", ChildValue={"ValueText": "child"})
 
 
-def test_recursive_helpers_preserve_ordinary_container_shapes() -> None:
+def test_recursive_wire_decoder_preserves_ordinary_container_shapes() -> None:
     message = common_pb2.File(Name="nested", Data=b"data")
     original = {
         "list": [message, "unchanged"],
@@ -296,7 +302,7 @@ def test_recursive_helpers_preserve_ordinary_container_shapes() -> None:
         "number": 42,
     }
 
-    converted = protobuf_to_pydantic(original)
+    converted = _protobuf_to_pydantic(original)
 
     assert isinstance(converted, dict)
     assert isinstance(converted["list"], list)
@@ -304,4 +310,17 @@ def test_recursive_helpers_preserve_ordinary_container_shapes() -> None:
     assert isinstance(converted["list"][0], models.commonpb.File)
     assert converted["list"][1] == "unchanged"
     assert converted["number"] == 42
-    assert pydantic_to_protobuf(converted) == original
+    assert _model_to_protobuf(converted["list"][0]) == message
+    assert _model_to_protobuf(converted["tuple"][0]) == message
+
+
+def test_wire_conversion_is_private_and_rejects_raw_messages_in_model_encoder() -> None:
+    model = models.commonpb.File(name="payload.bin", data=b"payload")
+
+    assert not hasattr(model, "to_protobuf")
+    assert not hasattr(type(model), "from_protobuf")
+    assert not hasattr(type(model), "__protobuf_class__")
+    assert not hasattr(type(model), "__protobuf_descriptor__")
+
+    with pytest.raises(TypeError, match="not bound to a protobuf descriptor"):
+        _model_to_protobuf(common_pb2.File())  # type: ignore[arg-type]

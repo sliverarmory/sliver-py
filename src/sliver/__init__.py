@@ -10,10 +10,7 @@ from .models import (
     ProtobufEnum,
     ProtobufModel,
     get_pydantic_model,
-    protobuf_to_pydantic,
-    pydantic_to_protobuf,
 )
-from .protobuf import client_pb2, common_pb2, sliver_pb2
 from .session import InteractiveSession
 
 try:
@@ -29,11 +26,6 @@ __all__ = [
     "SliverClient",
     "SliverClientConfig",
     "SliverWireGuardConfig",
-    "client_pb2",
-    "common_pb2",
     "get_pydantic_model",
     "models",
-    "protobuf_to_pydantic",
-    "pydantic_to_protobuf",
-    "sliver_pb2",
 ]

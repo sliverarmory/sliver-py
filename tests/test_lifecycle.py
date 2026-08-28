@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from sliver import SliverClient, SliverClientConfig
+from sliver._pb.clientpb import client_pb2
 from sliver.beacon import BaseBeacon
+from sliver.session import BaseSession
 
 
 def _config() -> SliverClientConfig:
@@ -34,17 +36,25 @@ async def test_client_close_releases_the_channel_and_is_idempotent() -> None:
     assert not client.is_connected()
     with pytest.raises(RuntimeError, match="client is not connected"):
         _ = client.pydantic_stub
-    with pytest.raises(RuntimeError, match="client is not connected"):
-        _ = client.raw_stub
+    assert not hasattr(client, "raw_stub")
 
 
-def test_public_stubs_expose_converted_and_raw_rpc_interfaces() -> None:
+def test_public_stub_only_exposes_the_converted_rpc_interface() -> None:
     client = SliverClient(_config())
     converted_stub = AsyncMock()
     client._stub = converted_stub
 
     assert client.pydantic_stub is converted_stub
-    assert client.raw_stub is converted_stub.raw
+    assert not hasattr(client, "raw_stub")
+
+
+def test_public_constructors_reject_raw_protobuf_inputs() -> None:
+    with pytest.raises(TypeError, match="SliverClientConfig Pydantic model"):
+        SliverClient({"operator": "raw"})  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="Session Pydantic model"):
+        BaseSession(client_pb2.Session(), object())  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="Beacon Pydantic model"):
+        BaseBeacon(client_pb2.Beacon(), object())  # type: ignore[arg-type]
 
 
 async def test_beacon_close_cancels_the_watcher_and_pending_commands() -> None:
@@ -52,7 +62,7 @@ async def test_beacon_close_cancels_the_watcher_and_pending_commands() -> None:
     watcher = asyncio.create_task(blocker.wait())
     pending = asyncio.get_running_loop().create_future()
     beacon = BaseBeacon.__new__(BaseBeacon)
-    beacon.beacon_tasks = {"task-id": (pending, None)}
+    beacon._beacon_tasks = {"task-id": (pending, object)}
     beacon._taskresult_watcher = watcher
     beacon._closed = False
 
@@ -61,13 +71,13 @@ async def test_beacon_close_cancels_the_watcher_and_pending_commands() -> None:
 
     assert watcher.cancelled()
     assert pending.cancelled()
-    assert beacon.beacon_tasks == {}
+    assert beacon._beacon_tasks == {}
 
 
 async def test_beacon_commands_wait_for_the_result_stream() -> None:
     blocker = asyncio.Event()
     beacon = BaseBeacon.__new__(BaseBeacon)
-    beacon.beacon_tasks = {}
+    beacon._beacon_tasks = {}
     beacon._closed = False
     beacon._taskresult_error = None
     beacon._taskresult_ready = asyncio.Event()

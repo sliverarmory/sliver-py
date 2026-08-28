@@ -1,8 +1,8 @@
 # SliverPy
 
-SliverPy is an async Python client library for [Sliver](https://github.com/BishopFox/sliver). It automates operator interactions over Sliver's mutually authenticated gRPC API and exposes descriptor-generated [Pydantic](https://docs.pydantic.dev/) models instead of generated protobuf messages at the public API. [See the project documentation for more details](https://sliverpy.readthedocs.io/).
+SliverPy is an async Python client library for [Sliver](https://github.com/BishopFox/sliver). It automates operator interactions over Sliver's mutually authenticated gRPC API and exposes descriptor-generated [Pydantic](https://docs.pydantic.dev/) models instead of generated transport messages at the public API. [See the project documentation for more details](https://sliverpy.readthedocs.io/).
 
-The v0.1 API is generated from the Sliver protobuf definitions at the submodule commit pinned by this release. Not every Sliver feature has a high-level convenience method yet; public Pydantic-aware and raw generated gRPC stubs are available for advanced use.
+The v0.1 API is generated from the Sliver definitions at the exact submodule commit pinned by this repository. Not every Sliver RPC has a high-level convenience method yet; the Pydantic-only `pydantic_stub` remains available for advanced use.
 
 [![SliverPy](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml/badge.svg)](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml)
 [![Documentation Status](https://readthedocs.org/projects/sliverpy/badge/?version=latest)](https://sliverpy.readthedocs.io/en/latest/?badge=latest)
@@ -78,6 +78,12 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
+`InteractiveSession.session` returns a defensive copy of the complete
+`models.clientpb.Session` metadata model. Convenience properties such as
+`session_id`, `name`, `hostname`, `os`, `arch`, and `pid` expose common fields.
+The interaction shares the client's channel, so closing the client completes
+its cleanup.
+
 #### Interact with Beacons
 
 ```python
@@ -126,10 +132,13 @@ if __name__ == "__main__":
 ```
 
 Closing an `InteractiveBeacon` stops its local task-result watcher; it does not terminate or remove the remote beacon.
+`InteractiveBeacon.beacon` returns a defensive copy of the complete
+`models.clientpb.Beacon` metadata model, with matching scalar convenience
+properties such as `beacon_id`, `name`, `hostname`, `os`, `arch`, and `pid`.
 
 ## Pydantic models
 
-Every top-level protobuf message and enum has a Pydantic counterpart at `sliver.models.<package>.<Type>`. Nested messages and enums remain attributes of their containing model, such as `models.sliverpb.SockTabEntry.SockAddr`. Model attributes and constructor arguments use Python `snake_case`; original protobuf field and JSON names remain accepted as validation aliases for migration.
+Every top-level Sliver API message and enum has a Pydantic counterpart at `sliver.models.<package>.<Type>`. Nested messages and enums remain attributes of their containing model, such as `models.sliverpb.SockTabEntry.SockAddr`, while map entries become normal dictionaries. Model attributes and constructor arguments use Python `snake_case`; original schema field names remain accepted as validation aliases.
 
 ```python
 from sliver import models
@@ -140,15 +149,11 @@ request = models.clientpb.RenameReq(
     name="web-server",
 )
 
-# Existing protobuf-shaped data is accepted at validation boundaries.
+# Schema-shaped mappings are accepted at Pydantic validation boundaries.
 same_request = models.clientpb.RenameReq.model_validate(
     {"SessionID": "session-id", "Name": "web-server"}
 )
 assert same_request.session_id == request.session_id
-
-# Explicit conversion is available when integrating with protobuf-only code.
-protobuf_request = request.to_protobuf()
-request_again = models.clientpb.RenameReq.from_protobuf(protobuf_request)
 
 # Enum fields use generated IntEnum members, and nested messages use models.
 implant_config = models.clientpb.ImplantConfig(
@@ -160,25 +165,17 @@ implant_config = models.clientpb.ImplantConfig(
 )
 ```
 
-After `SliverClient.connect()`, normal client and interactive calls convert model requests to protobuf and responses back to Pydantic automatically. Advanced callers can submit a model directly through the public converted RPC stub:
+Models support normal Pydantic validation and serialization methods, including `model_validate()`, `model_dump()`, `model_dump_json()`, and `model_json_schema()`. Repeated fields are lists, map fields are dictionaries, and enum fields use generated `IntEnum` members.
+
+After `SliverClient.connect()`, every client, session, and beacon method accepts and returns only Pydantic models, standard Python containers, or primitive values. Advanced callers can invoke an RPC that lacks a high-level convenience method through the same Pydantic-only boundary:
 
 ```python
 await client.pydantic_stub.Rename(request)
 ```
 
-If exact generated protobuf behavior is required, use the explicit raw escape hatch. Raw RPCs require raw protobuf requests and return raw protobuf responses. Both stubs are available only while the client is connected:
+`pydantic_stub` is available only while the client is connected and validates each RPC's request model. The generated wire implementation is private: external callers neither pass nor receive generated transport messages.
 
-```python
-from sliver.pb.clientpb import client_pb2
-
-raw_request = client_pb2.RenameReq(
-    SessionID="session-id",
-    Name="web-server",
-)
-await client.raw_stub.Rename(raw_request)
-```
-
-See [Pydantic models and protobuf interoperability](https://sliverpy.readthedocs.io/en/latest/models.html) for namespaces, serialization, aliases, and conversion details.
+See the [Pydantic model API](https://sliverpy.readthedocs.io/en/latest/models.html) for namespaces, serialization, aliases, nested types, field presence, and validation details.
 
 ## Development
 
@@ -212,9 +209,9 @@ In either case, `scripts/sliver_install.sh` contains a modified version of the o
 
 Alternatively, you can still choose to set up an external Sliver instance to connect to via Sliver's [multi-player mode](https://github.com/BishopFox/sliver/wiki/Multiplayer-Mode). The `sliver_install` script is purely for local development convenience.
 
-### Updating protobufs
+### Updating generated models
 
-This should only be necessary when changes are made to Sliver's protobuf definitions. Update the submodule, sync the generator dependencies, then regenerate both the Python modules and `.pyi` type hints:
+The repository records an exact Sliver submodule commit so local generation and CI use the same API definitions. When intentionally updating for a release, advance the submodule on its configured branch, review and stage the resulting gitlink, then regenerate the private transport modules and Pydantic model inputs:
 
 ```console
 git submodule update --init --remote sliver
@@ -224,7 +221,7 @@ uv run python scripts/protobufgen.py
 
 ### Running tests
 
-The integration tests require a running Sliver server, an operator configuration at `~/.sliver-client/configs/sliverpy.cfg`, and at least one connected beacon and session implant. Run the full pytest suite or select a marker:
+The optional integration tests require a running Sliver server, an operator configuration selected with `SLIVER_CONFIG` (or `~/.sliver-client/configs/sliverpy.cfg`), and at least one connected beacon and session implant. Run the full pytest suite or select a marker:
 
 - `uv run pytest`: all tests
 - `uv run pytest -m client`: top-level client API tests

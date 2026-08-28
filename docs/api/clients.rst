@@ -5,15 +5,20 @@ This module connects to the Sliver gRPC API. Most users should use
 ``SliverClient``; ``BaseClient`` provides shared connection behavior for client
 implementations. Public request and response values are Pydantic models.
 
-Call ``await client.connect()`` before using either high-level methods or the
-low-level stubs, and release the gRPC channel with ``await client.close()``.
-``client.pydantic_stub`` automatically converts descriptor-generated Pydantic
-requests and protobuf responses. ``client.raw_stub`` intentionally performs no
-conversion. Both properties are unavailable while disconnected.
+Call ``await client.connect()`` before using high-level methods or
+``client.pydantic_stub``. ``connect()`` returns a
+``models.clientpb.Version`` model. Always release the gRPC channel with
+``await client.close()``; the Pydantic-only stub becomes unavailable again
+after closing.
+
+``client.pydantic_stub`` is the supported low-level extension point for an RPC
+that lacks a convenience method. It accepts the Pydantic request model declared
+for that RPC and returns its Pydantic response model, including for streaming
+RPCs. Generated transport objects are not part of the public client API.
 
 Collection helpers such as ``sessions()``, ``beacons()``, and ``jobs()`` return
-normal Python lists containing Pydantic models rather than protobuf container
-messages.
+normal Python lists containing Pydantic models rather than transport wrapper
+objects.
 
 
 BaseClient

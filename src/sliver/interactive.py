@@ -18,7 +18,6 @@ from __future__ import annotations
 
 from . import models
 from ._protocols import InteractiveObject
-from .models import protobuf_to_pydantic
 
 
 class BaseInteractiveCommands:
@@ -28,8 +27,8 @@ class BaseInteractiveCommands:
         :return: Pydantic ping model
         :rtype: models.sliverpb.Ping
         """
-        return await self._stub.Ping(
-            self._request(models.sliverpb.Ping()), timeout=self.timeout
+        return await self._execute(
+            "Ping", self._request(models.sliverpb.Ping()), models.sliverpb.Ping
         )
 
     async def ps(self: InteractiveObject) -> models.sliverpb.Ps:
@@ -39,10 +38,10 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Ps
         """
         ps = models.sliverpb.PsReq()
-        return await self._stub.Ps(self._request(ps), timeout=self.timeout)
+        return await self._execute("Ps", self._request(ps), models.sliverpb.Ps)
 
     async def terminate(
-        self: InteractiveObject, pid: int, force=False
+        self: InteractiveObject, pid: int, force: bool = False
     ) -> models.sliverpb.Terminate:
         """Terminate a remote process
 
@@ -54,8 +53,8 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Terminate
         """
         terminator = models.sliverpb.TerminateReq(pid=pid, force=force)
-        return await self._stub.Terminate(
-            self._request(terminator), timeout=self.timeout
+        return await self._execute(
+            "Terminate", self._request(terminator), models.sliverpb.Terminate
         )
 
     async def ifconfig(self: InteractiveObject) -> models.sliverpb.Ifconfig:
@@ -64,8 +63,10 @@ class BaseInteractiveCommands:
         :return: Pydantic interface-configuration model
         :rtype: models.sliverpb.Ifconfig
         """
-        return await self._stub.Ifconfig(
-            self._request(models.sliverpb.IfconfigReq()), timeout=self.timeout
+        return await self._execute(
+            "Ifconfig",
+            self._request(models.sliverpb.IfconfigReq()),
+            models.sliverpb.Ifconfig,
         )
 
     async def netstat(
@@ -74,7 +75,7 @@ class BaseInteractiveCommands:
         udp: bool,
         ipv4: bool,
         ipv6: bool,
-        listening=True,
+        listening: bool = True,
     ) -> models.sliverpb.Netstat:
         """Get information about network connections on the remote system.
 
@@ -94,7 +95,9 @@ class BaseInteractiveCommands:
         net = models.sliverpb.NetstatReq(
             tcp=tcp, udp=udp, ip4=ipv4, ip6=ipv6, listening=listening
         )
-        return await self._stub.Netstat(self._request(net), timeout=self.timeout)
+        return await self._execute(
+            "Netstat", self._request(net), models.sliverpb.Netstat
+        )
 
     async def ls(self: InteractiveObject, remote_path: str = ".") -> models.sliverpb.Ls:
         """Get a directory listing from the remote system
@@ -105,7 +108,7 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Ls
         """
         ls = models.sliverpb.LsReq(path=remote_path)
-        return await self._stub.Ls(self._request(ls), timeout=self.timeout)
+        return await self._execute("Ls", self._request(ls), models.sliverpb.Ls)
 
     async def cd(self: InteractiveObject, remote_path: str) -> models.sliverpb.Pwd:
         """Change the current working directory of the implant
@@ -116,7 +119,7 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Pwd
         """
         cd = models.sliverpb.CdReq(path=remote_path)
-        return await self._stub.Cd(self._request(cd), timeout=self.timeout)
+        return await self._execute("Cd", self._request(cd), models.sliverpb.Pwd)
 
     async def pwd(self: InteractiveObject) -> models.sliverpb.Pwd:
         """Get the implant's current working directory
@@ -125,10 +128,13 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Pwd
         """
         pwd = models.sliverpb.PwdReq()
-        return await self._stub.Pwd(self._request(pwd), timeout=self.timeout)
+        return await self._execute("Pwd", self._request(pwd), models.sliverpb.Pwd)
 
     async def rm(
-        self: InteractiveObject, remote_path: str, recursive=False, force=False
+        self: InteractiveObject,
+        remote_path: str,
+        recursive: bool = False,
+        force: bool = False,
     ) -> models.sliverpb.Rm:
         """Remove a directory or file(s)
 
@@ -142,7 +148,7 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Rm
         """
         rm = models.sliverpb.RmReq(path=remote_path, recursive=recursive, force=force)
-        return await self._stub.Rm(self._request(rm), timeout=self.timeout)
+        return await self._execute("Rm", self._request(rm), models.sliverpb.Rm)
 
     async def mkdir(self: InteractiveObject, remote_path: str) -> models.sliverpb.Mkdir:
         """Make a directory on the remote file system
@@ -153,7 +159,9 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Mkdir
         """
         make = models.sliverpb.MkdirReq(path=remote_path)
-        return await self._stub.Mkdir(self._request(make), timeout=self.timeout)
+        return await self._execute(
+            "Mkdir", self._request(make), models.sliverpb.Mkdir
+        )
 
     async def download(
         self: InteractiveObject, remote_path: str, recurse: bool = False
@@ -168,7 +176,9 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Download
         """
         download = models.sliverpb.DownloadReq(path=remote_path, recurse=recurse)
-        return await self._stub.Download(self._request(download), timeout=self.timeout)
+        return await self._execute(
+            "Download", self._request(download), models.sliverpb.Download
+        )
 
     async def upload(
         self: InteractiveObject,
@@ -188,7 +198,9 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Upload
         """
         upload = models.sliverpb.UploadReq(path=remote_path, data=data, is_ioc=is_ioc)
-        return await self._stub.Upload(self._request(upload), timeout=self.timeout)
+        return await self._execute(
+            "Upload", self._request(upload), models.sliverpb.Upload
+        )
 
     async def process_dump(
         self: InteractiveObject, pid: int
@@ -201,8 +213,8 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.ProcessDump
         """
         procdump = models.sliverpb.ProcessDumpReq(pid=pid)
-        return await self._stub.ProcessDump(
-            self._request(procdump), timeout=self.timeout
+        return await self._execute(
+            "ProcessDump", self._request(procdump), models.sliverpb.ProcessDump
         )
 
     async def run_as(
@@ -222,7 +234,9 @@ class BaseInteractiveCommands:
         run_as = models.sliverpb.RunAsReq(
             username=username, process_name=process_name, args=args
         )
-        return await self._stub.RunAs(self._request(run_as), timeout=self.timeout)
+        return await self._execute(
+            "RunAs", self._request(run_as), models.sliverpb.RunAs
+        )
 
     async def impersonate(
         self: InteractiveObject, username: str
@@ -235,8 +249,8 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Impersonate
         """
         impersonate = models.sliverpb.ImpersonateReq(username=username)
-        return await self._stub.Impersonate(
-            self._request(impersonate), timeout=self.timeout
+        return await self._execute(
+            "Impersonate", self._request(impersonate), models.sliverpb.Impersonate
         )
 
     async def revert_to_self(self: InteractiveObject) -> models.sliverpb.RevToSelf:
@@ -245,8 +259,10 @@ class BaseInteractiveCommands:
         :return: Pydantic revert-result model
         :rtype: models.sliverpb.RevToSelf
         """
-        return await self._stub.RevToSelf(
-            self._request(models.sliverpb.RevToSelfReq()), timeout=self.timeout
+        return await self._execute(
+            "RevToSelf",
+            self._request(models.sliverpb.RevToSelfReq()),
+            models.sliverpb.RevToSelf,
         )
 
     async def get_system(
@@ -265,12 +281,18 @@ class BaseInteractiveCommands:
         """
         system = models.clientpb.GetSystemReq(
             hosting_process=hosting_process,
-            config=protobuf_to_pydantic(config),
+            config=config,
         )
-        return await self._stub.GetSystem(self._request(system), timeout=self.timeout)
+        return await self._execute(
+            "GetSystem", self._request(system), models.sliverpb.GetSystem
+        )
 
     async def execute_shellcode(
-        self: InteractiveObject, data: bytes, rwx: bool, pid: int, encoder=""
+        self: InteractiveObject,
+        data: bytes,
+        rwx: bool,
+        pid: int,
+        encoder: str = "",
     ) -> models.sliverpb.Task:
         """Execute shellcode in-memory
 
@@ -288,7 +310,7 @@ class BaseInteractiveCommands:
         task = models.sliverpb.TaskReq(
             encoder=encoder, data=data, rwx_pages=rwx, pid=pid
         )
-        return await self._stub.Task(self._request(task), timeout=self.timeout)
+        return await self._execute("Task", self._request(task), models.sliverpb.Task)
 
     async def msf(
         self: InteractiveObject,
@@ -320,7 +342,7 @@ class BaseInteractiveCommands:
             encoder=encoder,
             iterations=iterations,
         )
-        return await self._stub.Msf(self._request(msf), timeout=self.timeout)
+        return await self._execute("Msf", self._request(msf), models.sliverpb.Task)
 
     async def msf_remote(
         self: InteractiveObject,
@@ -356,7 +378,9 @@ class BaseInteractiveCommands:
             iterations=iterations,
             pid=pid,
         )
-        return await self._stub.MsfRemote(self._request(msf), timeout=self.timeout)
+        return await self._execute(
+            "MsfRemote", self._request(msf), models.sliverpb.Task
+        )
 
     async def execute_assembly(
         self: InteractiveObject,
@@ -400,8 +424,10 @@ class BaseInteractiveCommands:
             method=method,
             app_domain=app_domain,
         )
-        return await self._stub.ExecuteAssembly(
-            self._request(asm), timeout=self.timeout
+        return await self._execute(
+            "ExecuteAssembly",
+            self._request(asm),
+            models.sliverpb.ExecuteAssembly,
         )
 
     async def migrate(
@@ -416,10 +442,10 @@ class BaseInteractiveCommands:
         :return: Pydantic migration-result model
         :rtype: models.sliverpb.Migrate
         """
-        migrate = models.clientpb.MigrateReq(
-            pid=pid, config=protobuf_to_pydantic(config)
+        migrate = models.clientpb.MigrateReq(pid=pid, config=config)
+        return await self._execute(
+            "Migrate", self._request(migrate), models.sliverpb.Migrate
         )
-        return await self._stub.Migrate(self._request(migrate), timeout=self.timeout)
 
     async def execute(
         self: InteractiveObject,
@@ -441,8 +467,8 @@ class BaseInteractiveCommands:
         if not args:
             args = []
         execute_req = models.sliverpb.ExecuteReq(path=exe, args=args, output=output)
-        return await self._stub.Execute(
-            self._request(execute_req), timeout=self.timeout
+        return await self._execute(
+            "Execute", self._request(execute_req), models.sliverpb.Execute
         )
 
     async def sideload(
@@ -475,7 +501,9 @@ class BaseInteractiveCommands:
             entry_point=entry_point,
             kill=kill,
         )
-        return await self._stub.Sideload(self._request(side), timeout=self.timeout)
+        return await self._execute(
+            "Sideload", self._request(side), models.sliverpb.Sideload
+        )
 
     async def spawn_dll(
         self: InteractiveObject,
@@ -507,7 +535,9 @@ class BaseInteractiveCommands:
             entry_point=entry_point,
             kill=kill,
         )
-        return await self._stub.SpawnDll(self._request(spawn), timeout=self.timeout)
+        return await self._execute(
+            "SpawnDll", self._request(spawn), models.sliverpb.SpawnDll
+        )
 
     async def list_extensions(
         self: InteractiveObject,
@@ -518,8 +548,10 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.ListExtensions
         """
         listex = models.sliverpb.ListExtensionsReq()
-        return await self._stub.ListExtensions(
-            self._request(listex), timeout=self.timeout
+        return await self._execute(
+            "ListExtensions",
+            self._request(listex),
+            models.sliverpb.ListExtensions,
         )
 
     async def register_extension(
@@ -548,8 +580,10 @@ class BaseInteractiveCommands:
             os=goos,
             init=init,
         )
-        return await self._stub.RegisterExtension(
-            self._request(regext), timeout=self.timeout
+        return await self._execute(
+            "RegisterExtension",
+            self._request(regext),
+            models.sliverpb.RegisterExtension,
         )
 
     async def call_extension(
@@ -574,8 +608,10 @@ class BaseInteractiveCommands:
             export=export,
             args=ext_args,
         )
-        return await self._stub.CallExtension(
-            self._request(callex), timeout=self.timeout
+        return await self._execute(
+            "CallExtension",
+            self._request(callex),
+            models.sliverpb.CallExtension,
         )
 
     async def screenshot(self: InteractiveObject) -> models.sliverpb.Screenshot:
@@ -584,8 +620,10 @@ class BaseInteractiveCommands:
         :return: Pydantic screenshot model
         :rtype: models.sliverpb.Screenshot
         """
-        return await self._stub.Screenshot(
-            self._request(models.sliverpb.ScreenshotReq()), timeout=self.timeout
+        return await self._execute(
+            "Screenshot",
+            self._request(models.sliverpb.ScreenshotReq()),
+            models.sliverpb.Screenshot,
         )
 
     async def make_token(
@@ -605,7 +643,9 @@ class BaseInteractiveCommands:
         make = models.sliverpb.MakeTokenReq(
             username=username, password=password, domain=domain
         )
-        return await self._stub.MakeToken(self._request(make), timeout=self.timeout)
+        return await self._execute(
+            "MakeToken", self._request(make), models.sliverpb.MakeToken
+        )
 
     async def get_env(self: InteractiveObject, name: str) -> models.sliverpb.EnvInfo:
         """Get an environment variable
@@ -616,7 +656,9 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.EnvInfo
         """
         env = models.sliverpb.EnvReq(name=name)
-        return await self._stub.GetEnv(self._request(env), timeout=self.timeout)
+        return await self._execute(
+            "GetEnv", self._request(env), models.sliverpb.EnvInfo
+        )
 
     async def set_env(
         self: InteractiveObject, key: str, value: str
@@ -632,7 +674,9 @@ class BaseInteractiveCommands:
         """
         env_var = models.commonpb.EnvVar(key=key, value=value)
         env_req = models.sliverpb.SetEnvReq(variable=env_var)
-        return await self._stub.SetEnv(self._request(env_req), timeout=self.timeout)
+        return await self._execute(
+            "SetEnv", self._request(env_req), models.sliverpb.SetEnv
+        )
 
     async def unset_env(self: InteractiveObject, key: str) -> models.sliverpb.UnsetEnv:
         """Unset an environment variable
@@ -643,7 +687,9 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.UnsetEnv
         """
         env = models.sliverpb.UnsetEnvReq(name=key)
-        return await self._stub.UnsetEnv(self._request(env), timeout=self.timeout)
+        return await self._execute(
+            "UnsetEnv", self._request(env), models.sliverpb.UnsetEnv
+        )
 
     async def registry_read(
         self: InteractiveObject, hive: str, reg_path: str, key: str, hostname: str
@@ -664,7 +710,9 @@ class BaseInteractiveCommands:
         reg = models.sliverpb.RegistryReadReq(
             hive=hive, path=reg_path, key=key, hostname=hostname
         )
-        return await self._stub.RegistryRead(self._request(reg), timeout=self.timeout)
+        return await self._execute(
+            "RegistryRead", self._request(reg), models.sliverpb.RegistryRead
+        )
 
     async def registry_write(
         self: InteractiveObject,
@@ -713,7 +761,9 @@ class BaseInteractiveCommands:
             type=int(reg_type),
         )
 
-        return await self._stub.RegistryWrite(self._request(reg), timeout=self.timeout)
+        return await self._execute(
+            "RegistryWrite", self._request(reg), models.sliverpb.RegistryWrite
+        )
 
     async def registry_create_key(
         self: InteractiveObject, hive: str, reg_path: str, key: str, hostname: str
@@ -734,6 +784,8 @@ class BaseInteractiveCommands:
         reg = models.sliverpb.RegistryCreateKeyReq(
             hive=hive, path=reg_path, key=key, hostname=hostname
         )
-        return await self._stub.RegistryCreateKey(
-            self._request(reg), timeout=self.timeout
+        return await self._execute(
+            "RegistryCreateKey",
+            self._request(reg),
+            models.sliverpb.RegistryCreateKey,
         )

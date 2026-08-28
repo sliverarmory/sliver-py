@@ -2,10 +2,10 @@ Getting started
 ===============
 
 SliverPy connects to a Sliver server's multiplayer gRPC endpoint. The v0.1 API
-is generated from the Sliver protobuf definitions at the submodule commit
-pinned by this release. For strict compatibility, build the server from that
-commit rather than assuming a later Sliver release or ``master`` revision has
-the same API.
+is generated from the Sliver definitions at the exact submodule commit recorded
+by this repository. For reproducible development and testing, build the server
+from that pinned commit rather than assuming another Sliver revision has the
+same API.
 
 Create an operator configuration
 --------------------------------
@@ -78,7 +78,7 @@ Pydantic models
 ---------------
 
 Public request and response objects are Pydantic models generated from the
-bundled protobuf descriptors. Each type lives at
+bundled Sliver descriptors. Each type lives at
 ``sliver.models.<package>.<Type>`` and exposes ``snake_case`` fields. Import the
 ``models`` object itself; ``clientpb``, ``commonpb``, and ``sliverpb`` are
 runtime attribute namespaces, not importable Python submodules:
@@ -93,8 +93,8 @@ runtime attribute namespaces, not importable Python submodules:
     )
     print(request.session_id, request.name)
 
-At validation boundaries, the original protobuf names are aliases. This is
-useful when migrating existing protobuf-shaped input:
+The original schema field names are validation aliases. Python code still reads
+and writes the ``snake_case`` attribute:
 
 .. code-block:: python
 
@@ -103,17 +103,28 @@ useful when migrating existing protobuf-shaped input:
     )
     assert request.session_id == "session-id"
 
-Normal client calls automatically convert models to protobuf before an RPC and
-convert protobuf responses back to models. Use ``to_protobuf()`` and
-``from_protobuf()`` when an explicit conversion is needed:
+Every public client and interaction method accepts and returns Pydantic models,
+ordinary Python containers, or primitive values. The generated transport layer
+is private. See :doc:`models` for model namespaces, validation, serialization,
+nested types, and field-presence behavior.
+
+Low-level Pydantic RPC access
+-----------------------------
+
+If an RPC does not yet have a high-level convenience method, call it through
+``client.pydantic_stub`` after connecting. The stub validates the Pydantic
+request type and returns the Pydantic response type:
 
 .. code-block:: python
 
-    protobuf_request = request.to_protobuf()
-    restored = models.clientpb.RenameReq.from_protobuf(protobuf_request)
+    request = models.clientpb.RenameReq(
+        session_id="session-id",
+        name="web-server",
+    )
+    response = await client.pydantic_stub.Rename(request)
 
-See :doc:`models` for model namespaces, serialization, automatic RPC-boundary
-conversion, and the raw protobuf escape hatch.
+The property is unavailable before ``await client.connect()`` and after
+``await client.close()``.
 
 Nested models and enums
 -----------------------
@@ -165,8 +176,12 @@ Pass a session model's ``id`` to ``interact_session()`` to create an
         )
 
 The session model at ``sliver.models.clientpb.Session`` contains metadata about
-the connection. ``InteractiveSession`` performs commands against that session
-and shares the client's channel, so closing the client releases its resources.
+the connection. The interaction's ``session`` property returns a defensive copy
+of that complete model; scalar properties such as ``session_id``, ``name``,
+``hostname``, ``username``, ``os``, ``arch``, ``pid``, and ``remote_address``
+provide convenient access to common fields. ``InteractiveSession`` shares the
+client's channel and owns no separate background task, so closing the client
+releases its resources.
 
 Interactive beacons
 -------------------
@@ -200,6 +215,10 @@ asynchronous beacon task internally, so each command needs only one ``await``:
 
 ``InteractiveBeacon.close()`` stops the local task-result watcher and cancels
 pending local commands. It does not terminate or remove the remote beacon.
+The ``beacon`` property returns a defensive copy of the complete
+``sliver.models.clientpb.Beacon`` model; scalar properties such as
+``beacon_id``, ``name``, ``hostname``, ``username``, ``os``, ``arch``, ``pid``,
+and ``remote_address`` provide convenient access to common fields.
 
 Realtime events
 ---------------

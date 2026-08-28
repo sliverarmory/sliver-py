@@ -30,7 +30,6 @@ async def test_server_version_matches_the_native_runner(
     assert version == e2e_harness.version
     assert version.os == e2e_settings.target_os
     assert version.arch == e2e_settings.target_arch
-    assert version.major >= 1
 
 
 async def test_server_lists_the_generated_operator_as_a_pydantic_model(

@@ -1,31 +1,32 @@
 """
-    Sliver Implant Framework
-    Copyright (C) 2021  Bishop Fox
+Sliver Implant Framework
+Copyright (C) 2021  Bishop Fox
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+from __future__ import annotations
 
 import logging
-from typing import AsyncGenerator, Dict, Iterable, List, Optional, Union
+from collections.abc import AsyncGenerator
 
 import grpc
 
-from sliver.pb.commonpb.common_pb2 import Request
-
+from . import models
+from ._rpc import PydanticSliverRPCStub
 from .beacon import InteractiveBeacon
 from .config import SliverClientConfig
+from .models import protobuf_to_pydantic
 from .pb.rpcpb.services_pb2_grpc import SliverRPCStub
-from .protobuf import client_pb2, common_pb2, sliver_pb2
 from .session import InteractiveSession
 
 KB = 1024
@@ -34,8 +35,7 @@ GB = 1024 * MB
 TIMEOUT = 60
 
 
-class BaseClient(object):
-
+class BaseClient:
     # 2GB triggers an overflow error in the gRPC library so we do 2GB-1
     MAX_MESSAGE_LENGTH = (2 * GB) - 1
 
@@ -45,7 +45,7 @@ class BaseClient(object):
     def __init__(self, config: SliverClientConfig):
         self.config = config
         self._channel: grpc.aio.Channel = None  # type: ignore[assignment]
-        self._stub: SliverRPCStub = None  # type: ignore[assignment]
+        self._stub: PydanticSliverRPCStub = None  # type: ignore[assignment]
         self._log = logging.getLogger(self.__class__.__name__)
 
     def is_connected(self) -> bool:
@@ -53,10 +53,7 @@ class BaseClient(object):
 
     @property
     def target(self) -> str:
-        return "%s:%d" % (
-            self.config.lhost,
-            self.config.lport,
-        )
+        return f"{self.config.lhost}:{self.config.lport}"
 
     @property
     def credentials(self) -> grpc.ChannelCredentials:
@@ -80,9 +77,16 @@ class BaseClient(object):
             ("grpc.max_receive_message_length", self.MAX_MESSAGE_LENGTH),
         ]
 
+    @property
+    def raw_stub(self) -> SliverRPCStub:
+        """Return the generated protobuf stub for unsupported low-level RPCs."""
+
+        if self._stub is None:
+            raise RuntimeError("client is not connected")
+        return self._stub.raw
+
 
 class SliverClient(BaseClient):
-
     """Asyncio client implementation"""
 
     beacon_event_types = ["beacon-registered"]
@@ -90,23 +94,23 @@ class SliverClient(BaseClient):
     job_event_types = ["job-started", "job-stopped"]
     canary_event_types = ["canary"]
 
-    async def connect(self) -> client_pb2.Version:
+    async def connect(self) -> models.clientpb.Version:
         """Establish a connection to the Sliver server
 
-        :return: Protobuf Version object, containing the server's version information
-        :rtype: client_pb2.Version
+        :return: Pydantic model containing the server's version information
+        :rtype: models.clientpb.Version
         """
         self._channel = grpc.aio.secure_channel(
             target=self.target,
             credentials=self.credentials,
             options=self.options,
         )
-        self._stub = SliverRPCStub(self._channel)
+        self._stub = PydanticSliverRPCStub(self._channel)
         return await self.version()
 
     async def interact_session(
         self, session_id: str, timeout=TIMEOUT
-    ) -> Optional[InteractiveSession]:
+    ) -> InteractiveSession | None:
         """Interact with a session, returns an :class:`InteractiveSession`
 
         :param session_id: Session ID
@@ -121,7 +125,7 @@ class SliverClient(BaseClient):
 
     async def interact_beacon(
         self, beacon_id: str, timeout=TIMEOUT
-    ) -> Optional[InteractiveBeacon]:
+    ) -> InteractiveBeacon | None:
         """Interact with a beacon, returns an :class:`InteractiveBeacon`
 
         :param beacon_id: Beacon ID
@@ -136,94 +140,96 @@ class SliverClient(BaseClient):
 
     async def session_by_id(
         self, session_id: str, timeout=TIMEOUT
-    ) -> Optional[client_pb2.Session]:
+    ) -> models.clientpb.Session | None:
         """Get the session information from a session ID
 
         :param session_id: Session ID
         :type session_id: str
         :param timeout: gRPC timeout, defaults to 60 seconds
-        :return: Protobuf Session object
-        :rtype: Optional[client_pb2.Session]
+        :return: Matching Pydantic session model, if present
+        :rtype: Optional[models.clientpb.Session]
         """
         sessions = await self.sessions(timeout)
         for session in sessions:
-            if session.ID == session_id:
+            if session.id == session_id:
                 return session
 
     async def beacon_by_id(
         self, beacon_id: str, timeout=TIMEOUT
-    ) -> Optional[client_pb2.Beacon]:
+    ) -> models.clientpb.Beacon | None:
         """Get the beacon information from a beacon ID
 
         :param beacon_id: Beacon ID
         :type beacon_id: str
         :param timeout: gRPC timeout, defaults to 60 seconds
-        :return: Protobuf Beacon object
-        :rtype: Union[client_pb2.Beacon, None]
+        :return: Matching Pydantic beacon model, if present
+        :rtype: Optional[models.clientpb.Beacon]
         """
         beacons = await self.beacons(timeout)
         for beacon in beacons:
-            if beacon.ID == beacon_id:
+            if beacon.id == beacon_id:
                 return beacon
 
-    async def events(self) -> AsyncGenerator[client_pb2.Event, None]:
+    async def events(self) -> AsyncGenerator[models.clientpb.Event, None]:
         """All events
 
         :yield: A stream of events
-        :rtype: client_pb2.Event
+        :rtype: models.clientpb.Event
         """
-        async for event in self._stub.Events(common_pb2.Empty()):
+        async for event in self._stub.Events(models.commonpb.Empty()):
             yield event
 
     async def on(
-        self, event_types: Union[str, List[str]]
-    ) -> AsyncGenerator[client_pb2.Event, None]:
+        self, event_types: str | list[str]
+    ) -> AsyncGenerator[models.clientpb.Event, None]:
         """Iterate on a specific event or list of events
 
         :param event_types: An event type or list of event types
         :type event_types: Union[str, List[str]]
         :yield: A stream of events of the given type(s)
-        :rtype: client_pb2.Event
+        :rtype: models.clientpb.Event
         """
         if isinstance(event_types, str):
             event_types = [event_types]
         async for event in self.events():
-            if event.EventType in event_types:
+            if event.event_type in event_types:
                 yield event
 
-    async def version(self, timeout=TIMEOUT) -> client_pb2.Version:
+    async def version(self, timeout=TIMEOUT) -> models.clientpb.Version:
         """Get server version information
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf Version object
-        :rtype: client_pb2.Version
+        :return: Pydantic server-version model
+        :rtype: models.clientpb.Version
         """
-        return await self._stub.GetVersion(common_pb2.Empty(), timeout=timeout)
+        return await self._stub.GetVersion(models.commonpb.Empty(), timeout=timeout)
 
-    async def operators(self, timeout=TIMEOUT) -> List[client_pb2.Operator]:
+    async def operators(self, timeout=TIMEOUT) -> list[models.clientpb.Operator]:
         """Get a list of operators and their online status
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Operator objects
-        :rtype: List[client_pb2.Operator]
+        :return: Pydantic operator models
+        :rtype: list[models.clientpb.Operator]
         """
-        operators = await self._stub.GetOperators(common_pb2.Empty(), timeout=timeout)
-        return list(operators.Operators)
+        operators = await self._stub.GetOperators(
+            models.commonpb.Empty(), timeout=timeout
+        )
+        return list(operators.operators)
 
-    async def sessions(self, timeout=TIMEOUT) -> List[client_pb2.Session]:
+    async def sessions(self, timeout=TIMEOUT) -> list[models.clientpb.Session]:
         """Get a list of active sessions
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Session objects
-        :rtype: List[client_pb2.Session]
+        :return: Pydantic session models
+        :rtype: list[models.clientpb.Session]
         """
-        sessions: client_pb2.Sessions = await self._stub.GetSessions(
-            common_pb2.Empty(), timeout=timeout
+        sessions: models.clientpb.Sessions = await self._stub.GetSessions(
+            models.commonpb.Empty(), timeout=timeout
         )
-        return list(sessions.Sessions)
+        return list(sessions.sessions)
 
     async def rename_session(self, session_id: str, name: str, timeout=TIMEOUT) -> None:
         """Rename a session
@@ -237,7 +243,7 @@ class SliverClient(BaseClient):
         :return: None
         :rtype: None
         """
-        rename_req = client_pb2.RenameReq(SessionID=session_id, Name=name)
+        rename_req = models.clientpb.RenameReq(session_id=session_id, name=name)
         await self._stub.Rename(rename_req, timeout=timeout)
 
     async def kill_session(self, session_id: str, force=False, timeout=TIMEOUT) -> None:
@@ -250,20 +256,20 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        request = Request(SessionID=session_id, Timeout=timeout)
-        kill_req = sliver_pb2.KillReq(Force=force, Request=request)
+        request = models.commonpb.Request(session_id=session_id, timeout=timeout)
+        kill_req = models.sliverpb.KillReq(force=force, request=request)
         await self._stub.Kill(kill_req, timeout=timeout)
 
-    async def beacons(self, timeout=TIMEOUT) -> List[client_pb2.Beacon]:
+    async def beacons(self, timeout=TIMEOUT) -> list[models.clientpb.Beacon]:
         """Get a list of active beacons
 
         :param timeout: gRPC timeout, defaults to 60 seconds
-        :rtype: List[client_pb2.Beacon]
+        :rtype: list[models.clientpb.Beacon]
         """
-        beacons: client_pb2.Beacons = await self._stub.GetBeacons(
-            common_pb2.Empty(), timeout=timeout
+        beacons: models.clientpb.Beacons = await self._stub.GetBeacons(
+            models.commonpb.Empty(), timeout=timeout
         )
-        return list(beacons.Beacons)
+        return list(beacons.beacons)
 
     async def rename_beacon(self, beacon_id: str, name: str, timeout=TIMEOUT) -> None:
         """Rename a beacon
@@ -277,7 +283,7 @@ class SliverClient(BaseClient):
         :return: None
         :rtype: None
         """
-        rename_req = client_pb2.RenameReq(BeaconID=beacon_id, Name=name)
+        rename_req = models.clientpb.RenameReq(beacon_id=beacon_id, name=name)
         await self._stub.Rename(rename_req, timeout=timeout)
 
     async def kill_beacon(self, beacon_id: str, timeout=TIMEOUT) -> None:
@@ -288,130 +294,128 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        beacon_rm = client_pb2.Beacon(ID=beacon_id)
+        beacon_rm = models.clientpb.Beacon(id=beacon_id)
         await self._stub.RmBeacon(beacon_rm, timeout=timeout)
 
     async def beacon_tasks(
         self, beacon_id: str, timeout=TIMEOUT
-    ) -> List[client_pb2.BeaconTask]:
+    ) -> list[models.clientpb.BeaconTask]:
         """Get a list of tasks for a beacon
 
         :param beacon_id: Beacon ID to get tasks for
         :type beacon_id: str
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Task objects
-        :rtype: List[client_pb2.Task]
+        :return: Pydantic beacon-task models
+        :rtype: list[models.clientpb.BeaconTask]
         """
-        beacon = client_pb2.Beacon(ID=beacon_id)
+        beacon = models.clientpb.Beacon(id=beacon_id)
         tasks = await self._stub.GetBeaconTasks(beacon, timeout=timeout)
-        return list(tasks.Tasks)
+        return list(tasks.tasks)
 
     async def beacon_task_content(
         self, task_id: str, timeout=TIMEOUT
-    ) -> List[client_pb2.BeaconTask]:
-        """Get a list of tasks for a beacon
+    ) -> models.clientpb.BeaconTask:
+        """Get the stored request and response content for a beacon task
 
-        :param task_id: Task ID get contents for
-        :type task_id: sts
+        :param task_id: Task ID to get content for
+        :type task_id: str
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Task objects
-        :rtype: List[client_pb2.Task]
+        :return: Pydantic beacon-task model
+        :rtype: models.clientpb.BeaconTask
         """
-        beacon = client_pb2.Beacon(ID=task_id)
-        task = await self._stub.GetBeaconTaskContent(beacon, timeout=timeout)
+        task_req = models.clientpb.BeaconTask(id=task_id)
+        task = await self._stub.GetBeaconTaskContent(task_req, timeout=timeout)
         return task
 
-    async def jobs(self, timeout=TIMEOUT) -> List[client_pb2.Job]:
+    async def jobs(self, timeout=TIMEOUT) -> list[models.clientpb.Job]:
         """Get a list of active jobs
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Job objects
-        :rtype: List[client_pb2.Job]
+        :return: Pydantic job models
+        :rtype: list[models.clientpb.Job]
         """
-        jobs: client_pb2.Jobs = await self._stub.GetJobs(
-            common_pb2.Empty(), timeout=timeout
+        jobs: models.clientpb.Jobs = await self._stub.GetJobs(
+            models.commonpb.Empty(), timeout=timeout
         )
-        return list(jobs.Active)
+        return list(jobs.active)
 
-    async def job_by_id(self, job_id: int, timeout=TIMEOUT) -> Optional[client_pb2.Job]:
+    async def job_by_id(
+        self, job_id: int, timeout=TIMEOUT
+    ) -> models.clientpb.Job | None:
         """Get job by id
 
-        :param job_id: Beacon ID to get tasks for
-        :type job_id: str
+        :param job_id: Numeric job ID
+        :type job_id: int
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Job objects
-        :rtype: List[client_pb2.Job]
+        :return: Matching Pydantic job model, if present
+        :rtype: Optional[models.clientpb.Job]
         """
         for job in await self.jobs(timeout=timeout):
-            if job.ID == job_id:
+            if job.id == job_id:
                 return job
 
     async def job_by_port(
         self, job_port: int, timeout=TIMEOUT
-    ) -> Optional[client_pb2.Job]:
+    ) -> models.clientpb.Job | None:
         """Get job by port
 
+        :param job_port: Listener port to match
+        :type job_port: int
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of protobuf Job objects
-        :rtype: List[client_pb2.Job]
+        :return: Matching Pydantic job model, if present
+        :rtype: Optional[models.clientpb.Job]
         """
         for job in await self.jobs(timeout=timeout):
-            if job.Port == job_port:
+            if job.port == job_port:
                 return job
 
-    async def kill_job(self, job_id: int, timeout=TIMEOUT) -> client_pb2.KillJob:
+    async def kill_job(self, job_id: int, timeout=TIMEOUT) -> models.clientpb.KillJob:
         """Kill a job
 
         :param job_id: Numeric job ID to kill
         :type job_id: int
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf KillJob object
-        :rtype: client_pb2.KillJob
+        :return: Pydantic job-termination model
+        :rtype: models.clientpb.KillJob
         """
-        kill_req = client_pb2.KillJobReq(ID=job_id)
+        kill_req = models.clientpb.KillJobReq(id=job_id)
         return await self._stub.KillJob(kill_req, timeout=timeout)
 
     async def start_mtls_listener(
         self,
         host: str = "0.0.0.0",
         port: int = 8888,
-        persistent: bool = False,
         timeout=TIMEOUT,
-    ) -> client_pb2.MTLSListener:
+    ) -> models.clientpb.ListenerJob:
         """Start a mutual TLS (mTLS) C2 listener
 
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
+        :param host: Host interface to bind; an empty string binds all interfaces
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf MTLSListener object
-        :rtype: client_pb2.MTLSListener
+        :return: Pydantic listener-job model
+        :rtype: models.clientpb.ListenerJob
         """
-        mtls_req = client_pb2.MTLSListenerReq(
-            Host=host, Port=port, Persistent=persistent
-        )
+        mtls_req = models.clientpb.MTLSListenerReq(host=host, port=port)
         return await self._stub.StartMTLSListener(mtls_req, timeout=timeout)
 
     async def start_wg_listener(
         self,
-        tun_ip: str = None,
+        tun_ip: str | None = None,
         host: str = "0.0.0.0",
         port: int = 53,
         n_port: int = 8888,
         key_port: int = 1337,
-        persistent: bool = False,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.WGListener:
+    ) -> models.clientpb.ListenerJob:
         """Start a WireGuard (wg) C2 listener
 
         :param tun_ip: Virtual TUN IP listen address
@@ -424,66 +428,59 @@ class SliverClient(BaseClient):
         :type n_port: int
         :param key_port: Virtual TUN port number for key exchanges
         :type key_port: int
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf WGListener object
-        :rtype: client_pb2.WGListener
+        :return: Pydantic listener-job model
+        :rtype: models.clientpb.ListenerJob
         """
         if tun_ip is None:
             uniq_ip = await self.generate_wg_ip()
-            tun_ip = uniq_ip.IP
+            tun_ip = uniq_ip.ip
 
-        wg_req = client_pb2.WGListenerReq(
-            TunIP=tun_ip,
-            Host=host,
-            Port=port,
-            NPort=n_port,
-            KeyPort=key_port,
-            Persistent=persistent,
+        wg_req = models.clientpb.WGListenerReq(
+            tun_ip=tun_ip,
+            host=host,
+            port=port,
+            n_port=n_port,
+            key_port=key_port,
         )
         return await self._stub.StartWGListener(wg_req, timeout=timeout)
 
     async def start_dns_listener(
         self,
-        domains: List[str],
+        domains: list[str],
         host: str = "0.0.0.0",
         port: int = 53,
         canaries: bool = True,
-        persistent: bool = False,
         enforce_otp=True,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.DNSListener:
+    ) -> models.clientpb.ListenerJob:
         """Start a DNS C2 listener
 
         :param domains: C2 domains to listen for
         :type domains: List[str]
         :param canaries: Enable/disable DNS canaries
         :type canaries: bool
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
+        :param host: Host interface to bind; an empty string binds all interfaces
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param enforce_otp: Enforce OTP auth for DNS C2, defaults to True
         :type enforce_otp: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf DNSListener object
-        :rtype: client_pb2.DNSListener
+        :return: Pydantic listener-job model
+        :rtype: models.clientpb.ListenerJob
         """
         # Ensure domains always have a trailing dot
         domains = list(map(lambda d: d + "." if d[-1] != "." else d, domains))
 
-        dns_req = client_pb2.DNSListenerReq(
-            Domains=domains,
-            Canaries=canaries,
-            Host=host,
-            Port=port,
-            Persistent=persistent,
-            EnforceOTP=enforce_otp,
+        dns_req = models.clientpb.DNSListenerReq(
+            domains=domains,
+            canaries=canaries,
+            host=host,
+            port=port,
+            enforce_otp=enforce_otp,
         )
         return await self._stub.StartDNSListener(dns_req, timeout=timeout)
 
@@ -493,13 +490,12 @@ class SliverClient(BaseClient):
         port: int = 80,
         website: str = "",
         domain: str = "",
-        persistent: bool = False,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.HTTPListener:
+    ) -> models.clientpb.ListenerJob:
         """Start an HTTP C2 listener
 
 
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
+        :param host: Host interface to bind; an empty string binds all interfaces
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
@@ -507,20 +503,17 @@ class SliverClient(BaseClient):
         :type website: str
         :param domain: Domain name for HTTP server (one domain per listener)
         :type domain: str
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf HTTPListener object (NOTE: HTTP/HTTPS both return HTTPListener objects)
-        :rtype: client_pb2.HTTPListener
+        :return: Listener job metadata
+        :rtype: models.clientpb.ListenerJob
         """
-        http_req = client_pb2.HTTPListenerReq(
-            Domain=domain,
-            Host=host,
-            Port=port,
-            Secure=False,
-            Website=website,
-            Persistent=persistent,
+        http_req = models.clientpb.HTTPListenerReq(
+            domain=domain,
+            host=host,
+            port=port,
+            secure=False,
+            website=website,
         )
         return await self._stub.StartHTTPListener(http_req, timeout=timeout)
 
@@ -533,18 +526,17 @@ class SliverClient(BaseClient):
         cert: bytes = b"",
         key: bytes = b"",
         acme: bool = False,
-        persistent: bool = False,
         enforce_otp: bool = True,
         randomize_jarm: bool = True,
         long_poll_timeout: int = 1,
         long_poll_jitter: int = 2,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.HTTPListener:
+    ) -> models.clientpb.ListenerJob:
         """Start an HTTPS C2 listener
 
         :param domain: Domain name for HTTPS server (one domain per listener)
         :type domain: str
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
+        :param host: Host interface to bind; an empty string binds all interfaces
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
@@ -554,10 +546,8 @@ class SliverClient(BaseClient):
         :type cert: bytes
         :param key: TLS private key (leave blank to generate self-signed certificate)
         :type key: bytes
-        :param acme: Automatically provision TLS certificate using ACME (i.e., Let's Encrypt)
+        :param acme: Automatically provision a TLS certificate using ACME
         :type acme: bool
-        :param persistent: Register the listener as a persistent job (automatically start with server), defaults to False
-        :type persistent: bool, optional
         :param enforce_otp: Enforce OTP auth for HTTPS C2, defaults to True
         :type enforce_otp: bool, optional
         :param randomize_jarm: Randomize JARM fingerprint for HTTPS C2, defaults to True
@@ -568,32 +558,31 @@ class SliverClient(BaseClient):
         :type long_poll_jitter: int, optional
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf HTTPListener object (NOTE: HTTP/HTTPS both return HTTPListener objects)
-        :rtype: client_pb2.HTTPListener
+        :return: Listener job metadata
+        :rtype: models.clientpb.ListenerJob
         """
-        https_req = client_pb2.HTTPListenerReq(
-            Domain=domain,
-            Host=host,
-            Port=port,
-            Secure=True,
-            Website=website,
-            Cert=cert,
-            Key=key,
-            ACME=acme,
-            Persistent=persistent,
-            EnforceOTP=enforce_otp,
-            LongPollTimeout=long_poll_timeout,
-            LongPollJitter=long_poll_jitter,
-            RandomizeJARM=randomize_jarm,
+        https_req = models.clientpb.HTTPListenerReq(
+            domain=domain,
+            host=host,
+            port=port,
+            secure=True,
+            website=website,
+            cert=cert,
+            key=key,
+            acme=acme,
+            enforce_otp=enforce_otp,
+            long_poll_timeout=long_poll_timeout,
+            long_poll_jitter=long_poll_jitter,
+            randomize_jarm=randomize_jarm,
         )
         return await self._stub.StartHTTPSListener(https_req, timeout=timeout)
 
     async def start_tcp_stager_listener(
         self, host: str, port: int, data: bytes, timeout=TIMEOUT
-    ) -> client_pb2.StagerListener:
+    ) -> models.clientpb.StagerListener:
         """Start a TCP stager listener
 
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
+        :param host: Host interface to bind; an empty string binds all interfaces
         :type host: str
         :param port: TCP port number to start listener on
         :type port: int
@@ -601,126 +590,61 @@ class SliverClient(BaseClient):
         :type data: bytes
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf StagerListener object
-        :rtype: client_pb2.StagerListener
+        :return: Pydantic stager-listener model
+        :rtype: models.clientpb.StagerListener
         """
-        stage_req = client_pb2.StagerListenerReq(
-            Protocol=client_pb2.TCP,
-            Host=host,
-            Port=port,
-            Data=data,
+        stage_req = models.clientpb.StagerListenerReq(
+            protocol=models.clientpb.StageProtocol.TCP,
+            host=host,
+            port=port,
+            data=data,
         )
         return await self._stub.StartTCPStagerListener(stage_req, timeout=timeout)
 
-    async def start_http_stager_listener(
-        self,
-        host: str,
-        port: int,
-        data: bytes,
-        timeout: int = TIMEOUT,
-    ) -> client_pb2.StagerListener:
-        """Start an HTTP stager listener
-
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
-        :type host: str
-        :param port: TCP port number to start listener on
-        :type port: int
-        :param data: Binary data of stage to host on listener
-        :type data: bytes
-        :param timeout: gRPC timeout, defaults to 60 seconds
-        :type timeout: int, optional
-        :return: Protobuf StagerListener object
-        :rtype: client_pb2.StagerListener
-        """
-        stage_req = client_pb2.StagerListenerReq(
-            Protocol=client_pb2.HTTP, Host=host, Port=port, Data=data
-        )
-        return await self._stub.StartHTTPStagerListener(stage_req, timeout=timeout)
-
-    async def start_https_stager_listener(
-        self,
-        host: str,
-        port: int,
-        data: bytes,
-        cert: bytes,
-        key: bytes,
-        acme: bool,
-        timeout: int = TIMEOUT,
-    ) -> client_pb2.StagerListener:
-        """Start an HTTPS stager listener
-
-        :param host: Host interface to bind the listener to, an empty string will bind to all interfaces
-        :type host: str
-        :param port: TCP port number to start listener on
-        :type port: int
-        :param data: Binary data of stage to host on listener
-        :type data: bytes
-        :param cert: TLS certificate, leave blank to start listener as HTTP
-        :type cert: bytes
-        :param key: TLS key, leave blank to start listener as HTTP
-        :type key: bytes
-        :param acme: Automatically provision TLS certificate using ACME (i.e., Let's Encrypt)
-        :type acme: bool
-        :param timeout: gRPC timeout, defaults to 60 seconds
-        :type timeout: int, optional
-        :return: Protobuf StagerListener object
-        :rtype: client_pb2.StagerListener
-        """
-        stage_req = client_pb2.StagerListenerReq(
-            Protocol=client_pb2.HTTPS,
-            Host=host,
-            Port=port,
-            Data=data,
-            Cert=cert,
-            Key=key,
-            ACME=acme,
-        )
-        return await self._stub.StartHTTPStagerListener(stage_req, timeout=timeout)
-
     async def generate_implant(
-        self, config: client_pb2.ImplantConfig, timeout: int = 360
-    ) -> client_pb2.Generate:
+        self, config: models.clientpb.ImplantConfig, timeout: int = 360
+    ) -> models.clientpb.Generate:
         """Generate a new implant using a given configuration
 
-        :param config: Protobuf ImplantConfig object
-        :type config: client_pb2.ImplantConfig
+        :param config: Pydantic implant-configuration model
+        :type config: models.clientpb.ImplantConfig
         :param timeout: gRPC timeout, defaults to 360
         :type timeout: int, optional
-        :return: Protobuf Generate object containing the generated implant
-        :rtype: client_pb2.Generate
+        :return: Pydantic model containing the generated implant
+        :rtype: models.clientpb.Generate
         """
-        req = client_pb2.GenerateReq(Config=config)
+        req = models.clientpb.GenerateReq(config=protobuf_to_pydantic(config))
         return await self._stub.Generate(req, timeout=timeout)
 
     async def regenerate_implant(
         self, implant_name: str, timeout=TIMEOUT
-    ) -> client_pb2.Generate:
+    ) -> models.clientpb.Generate:
         """Regenerate an implant binary given the implants "name"
 
         :param implant_name: The name of the implant to regenerate
         :type implant_name: str
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf Generate object
-        :rtype: client_pb2.Generate
+        :return: Pydantic model containing the regenerated implant
+        :rtype: models.clientpb.Generate
         """
-        regenerate = client_pb2.RegenerateReq(ImplantName=implant_name)
+        regenerate = models.clientpb.RegenerateReq(implant_name=implant_name)
         return await self._stub.Regenerate(regenerate, timeout=timeout)
 
     async def implant_builds(
         self, timeout=TIMEOUT
-    ) -> Dict[str, client_pb2.ImplantConfig]:
+    ) -> dict[str, models.clientpb.ImplantConfig]:
         """Get information about historical implant builds
 
-        :return: Protobuf Map object, the keys are implant names the values are implant configs
-        :rtype: Dict[str, client_pb2.ImplantConfig]
+        :return: Map from implant names to their configurations
+        :rtype: dict[str, models.clientpb.ImplantConfig]
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        builds: client_pb2.ImplantBuilds = await self._stub.ImplantBuilds(
-            common_pb2.Empty(), timeout=timeout
+        builds: models.clientpb.ImplantBuilds = await self._stub.ImplantBuilds(
+            models.commonpb.Empty(), timeout=timeout
         )
-        return dict(builds.Configs)
+        return dict(builds.configs)
 
     async def delete_implant_build(self, implant_name: str, timeout=TIMEOUT) -> None:
         """Delete a historical implant build from the server by name
@@ -730,56 +654,60 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        delete = client_pb2.DeleteReq(Name=implant_name)
+        delete = models.clientpb.DeleteReq(name=implant_name)
         await self._stub.DeleteImplantBuild(delete, timeout=timeout)
 
-    async def canaries(self, timeout=TIMEOUT) -> List[client_pb2.DNSCanary]:
-        """Get a list of canaries that have been generated during implant builds, includes metadata about those canaries
+    async def canaries(self, timeout=TIMEOUT) -> list[models.clientpb.DNSCanary]:
+        """Get canaries generated during implant builds and their metadata.
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of Protobuf DNSCanary objects
-        :rtype: List[client_pb2.DNSCanary]
+        :return: Pydantic DNS-canary models
+        :rtype: list[models.clientpb.DNSCanary]
         """
-        canaries = await self._stub.Canaries(common_pb2.Empty(), timeout=timeout)
-        return list(canaries.Canaries)
+        canaries = await self._stub.Canaries(models.commonpb.Empty(), timeout=timeout)
+        return list(canaries.canaries)
 
     async def generate_wg_client_config(
         self, timeout=TIMEOUT
-    ) -> client_pb2.WGClientConfig:
+    ) -> models.clientpb.WGClientConfig:
         """Generate a new WireGuard client configuration files
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf WGClientConfig object
-        :rtype: client_pb2.WGClientConfig
+        :return: Pydantic WireGuard-client configuration model
+        :rtype: models.clientpb.WGClientConfig
         """
         return await self._stub.GenerateWGClientConfig(
-            common_pb2.Empty(), timeout=timeout
+            models.commonpb.Empty(), timeout=timeout
         )
 
-    async def generate_wg_ip(self, timeout=TIMEOUT) -> client_pb2.UniqueWGIP:
+    async def generate_wg_ip(self, timeout=TIMEOUT) -> models.clientpb.UniqueWGIP:
         """Generate a unique IP address for use with WireGuard
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf UniqueWGIP object
-        :rtype: client_pb2.UniqueWGIP
+        :return: Pydantic unique WireGuard IP model
+        :rtype: models.clientpb.UniqueWGIP
         """
-        return await self._stub.GenerateUniqueIP(common_pb2.Empty(), timeout=timeout)
+        return await self._stub.GenerateUniqueIP(
+            models.commonpb.Empty(), timeout=timeout
+        )
 
     async def implant_profiles(
         self, timeout=TIMEOUT
-    ) -> List[client_pb2.ImplantProfile]:
+    ) -> list[models.clientpb.ImplantProfile]:
         """Get a list of all implant configuration profiles on the server
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of Protobuf ImplantProfile objects
-        :rtype: List[client_pb2.ImplantProfile]
+        :return: Pydantic implant-profile models
+        :rtype: list[models.clientpb.ImplantProfile]
         """
-        profiles = await self._stub.ImplantProfiles(common_pb2.Empty(), timeout=timeout)
-        return list(profiles.Profiles)
+        profiles = await self._stub.ImplantProfiles(
+            models.commonpb.Empty(), timeout=timeout
+        )
+        return list(profiles.profiles)
 
     async def delete_implant_profile(self, profile_name, timeout=TIMEOUT) -> None:
         """Delete an implant configuration profile by name
@@ -789,70 +717,28 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        delete = client_pb2.DeleteReq()
-        delete.Name = profile_name
+        delete = models.clientpb.DeleteReq(name=profile_name)
         await self._stub.DeleteImplantProfile(delete, timeout=timeout)
 
     async def save_implant_profile(
-        self, profile: client_pb2.ImplantProfile, timeout=TIMEOUT
-    ) -> client_pb2.ImplantProfile:
+        self, profile: models.clientpb.ImplantProfile, timeout=TIMEOUT
+    ) -> models.clientpb.ImplantProfile:
         """Save an implant configuration profile to the server
 
-        :param profile: An implant configuration profile (a Protobuf ImplantProfile object)
-        :type profile: client_pb2.ImplantProfile
+        :param profile: An implant configuration profile model
+        :type profile: models.clientpb.ImplantProfile
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf ImplantProfile object
-        :rtype: client_pb2.ImplantProfile
+        :return: Pydantic implant-profile model
+        :rtype: models.clientpb.ImplantProfile
         """
-        return await self._stub.SaveImplantProfile(profile, timeout=timeout)
-
-    async def generate_msf_stager(
-        self,
-        arch: str,
-        format: str,
-        host: str,
-        port: int,
-        os: str,
-        protocol: client_pb2.StageProtocol.ValueType,
-        badchars: Optional[Iterable[str]],
-        timeout: int = TIMEOUT,
-    ) -> client_pb2.MsfStager:
-        """Create a Metasploit stager (if available on the server)
-
-        :param arch: CPU architecture
-        :type arch: str
-        :param format: Binary format (MSF)
-        :type format: str
-        :param host: LHOST (MSF)
-        :type host: str
-        :param port: LPORT (MSF)
-        :type port: int
-        :param os: Operating System (MSF)
-        :type os: str
-        :param protocol: Stager protocol (Protobuf StageProtocol object)
-        :type protocol: client_pb2.StageProtocol
-        :param badchars: Bad characters, defaults to []
-        :type badchars: list, optional
-        :param timeout: gRPC timeout, defaults to 60 seconds
-        :type timeout: int, optional
-        :return: Protobuf MsfStager object
-        :rtype: client_pb2.MsfStager
-        """
-        stagerReq = client_pb2.MsfStagerReq(
-            Arch=arch,
-            Format=format,
-            Host=host,
-            Port=port,
-            OS=os,
-            Protocol=protocol,
-            BadChars=badchars if badchars else [],
+        return await self._stub.SaveImplantProfile(
+            protobuf_to_pydantic(profile), timeout=timeout
         )
-        return await self._stub.MsfStage(stagerReq, timeout=timeout)
 
     async def shellcode(
         self, data: bytes, function_name: str, arguments: str = "", timeout=TIMEOUT
-    ) -> client_pb2.ShellcodeRDI:
+    ) -> models.clientpb.ShellcodeRDI:
         """Generate Donut shellcode
 
         :param data: The DLL file to wrap in a shellcode loader
@@ -863,38 +749,31 @@ class SliverClient(BaseClient):
         :type arguments: str
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf ShellcodeRDI object
-        :rtype: client_pb2.ShellcodeRDI
+        :return: Pydantic Shellcode RDI result model
+        :rtype: models.clientpb.ShellcodeRDI
         """
-        shellReq = client_pb2.ShellcodeRDIReq(
-            Data=data, FunctionName=function_name, Arguments=arguments
+        shell_req = models.clientpb.ShellcodeRDIReq(
+            data=data, function_name=function_name, arguments=arguments
         )
-        return await self._stub.ShellcodeRDI(shellReq, timeout=timeout)
+        return await self._stub.ShellcodeRDI(shell_req, timeout=timeout)
 
-    async def websites(self, timeout=TIMEOUT) -> List[client_pb2.Website]:
+    async def websites(self, timeout=TIMEOUT) -> list[models.clientpb.Website]:
         """Get a list of websites
 
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: List of Protobuf Website objects
-        :rtype: List[client_pb2.Website]
+        :return: Pydantic website models
+        :rtype: list[models.clientpb.Website]
         """
-        websites = await self._stub.Websites(common_pb2.Empty(), timeout=timeout)
-        return list(websites.Websites)
+        websites = await self._stub.Websites(models.commonpb.Empty(), timeout=timeout)
+        return list(websites.websites)
 
-    async def update_website(
-        self, website: client_pb2.Website, timeout=TIMEOUT
-    ) -> client_pb2.Website:
-        """Update an entire website object on the server
+    async def website(self, name: str, timeout=TIMEOUT) -> models.clientpb.Website:
+        """Get a website and its content by name."""
 
-        :param website: The updated Protobuf Website object
-        :type website: client_pb2.Website
-        :param timeout: gRPC timeout, defaults to 60 seconds
-        :type timeout: int, optional
-        :return: Protobuf Website object
-        :rtype: client_pb2.Website
-        """
-        return await self._stub.Websites(website, timeout=timeout)
+        return await self._stub.Website(
+            models.clientpb.Website(name=name), timeout=timeout
+        )
 
     async def remove_website(self, name: str, timeout=TIMEOUT) -> None:
         """Remove an entire website and its content
@@ -904,7 +783,7 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        website = client_pb2.Website(Name=name)
+        website = models.clientpb.Website(name=name)
         await self._stub.WebsiteRemove(website, timeout=timeout)
 
     async def add_website_content(
@@ -914,7 +793,7 @@ class SliverClient(BaseClient):
         content_type: str,
         content: bytes,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.Website:
+    ) -> models.clientpb.Website:
         """Add content to a specific website
 
         :param name: Name of the website to add the content to
@@ -927,14 +806,17 @@ class SliverClient(BaseClient):
         :type content: bytes
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf Website object
-        :rtype: client_pb2.Website
+        :return: Pydantic website model
+        :rtype: models.clientpb.Website
         """
-        web = client_pb2.WebContent(
-            Path=web_path, ContentType=content_type, Content=content, Size=len(content)
+        web = models.clientpb.WebContent(
+            path=web_path,
+            content_type=content_type,
+            content=content,
+            size=len(content),
         )
 
-        web_add = client_pb2.WebsiteAddContent(Name=name, Contents={web_path: web})
+        web_add = models.clientpb.WebsiteAddContent(name=name, contents={web_path: web})
         return await self._stub.WebsiteAddContent(web_add, timeout=timeout)
 
     async def update_website_content(
@@ -944,7 +826,7 @@ class SliverClient(BaseClient):
         content_type: str,
         content: bytes,
         timeout: int = TIMEOUT,
-    ) -> client_pb2.Website:
+    ) -> models.clientpb.Website:
         """Update content on a specific website / web path
 
         :param name: Name of the website to add the content to
@@ -957,19 +839,24 @@ class SliverClient(BaseClient):
         :type content: bytes
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf Website object
-        :rtype: client_pb2.Website
+        :return: Pydantic website model
+        :rtype: models.clientpb.Website
         """
-        web = client_pb2.WebContent(
-            Path=web_path, ContentType=content_type, Content=content, Size=len(content)
+        web = models.clientpb.WebContent(
+            path=web_path,
+            content_type=content_type,
+            content=content,
+            size=len(content),
         )
 
-        web_update = client_pb2.WebsiteAddContent(Name=name, Contents={web_path: web})
+        web_update = models.clientpb.WebsiteAddContent(
+            name=name, contents={web_path: web}
+        )
         return await self._stub.WebsiteUpdateContent(web_update, timeout=timeout)
 
     async def remove_website_content(
-        self, name: str, paths: List[str], timeout=TIMEOUT
-    ) -> client_pb2.Website:
+        self, name: str, paths: list[str], timeout=TIMEOUT
+    ) -> models.clientpb.Website:
         """Remove content from a specific website
 
         :param name: The name of the website from which to remove the content
@@ -978,8 +865,8 @@ class SliverClient(BaseClient):
         :type paths: List[str]
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
-        :return: Protobuf Website object
-        :rtype: client_pb2.Website
+        :return: Pydantic website model
+        :rtype: models.clientpb.Website
         """
-        web = client_pb2.WebsiteRemoveContent(Name=name, Paths=paths)
+        web = models.clientpb.WebsiteRemoveContent(name=name, paths=paths)
         return await self._stub.WebsiteRemoveContent(web, timeout=timeout)

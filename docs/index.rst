@@ -12,10 +12,9 @@ connects to servers using gRPC over Mutual TLS (i.e., multiplayer) using Sliver 
 
    install
    getting-started
+   models
 
    api/index
-
-   protobuf/index
 
 
 Indices and tables

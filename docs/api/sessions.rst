@@ -1,10 +1,12 @@
 Sessions
 ========
 
-This module is used to connect to session gRPC APIs. Users should only need to use the `InteractiveSession` class. The `BaseSession` class is not intended to be used directly but can be inherited by other Session classes.
+``InteractiveSession`` exposes commands for a connected session. ``BaseSession``
+contains shared session behavior for other implementations. Command results are
+Pydantic models.
 
-BaseSessions
-^^^^^^^^^^^^
+BaseSession
+^^^^^^^^^^^
 .. autoclass:: sliver.session.BaseSession
     :members:
     :undoc-members:

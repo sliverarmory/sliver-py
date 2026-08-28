@@ -1,73 +1,71 @@
 """
-    Sliver Implant Framework
-    Copyright (C) 2022  Bishop Fox
+Sliver Implant Framework
+Copyright (C) 2022  Bishop Fox
 
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    (at your option) any later version.
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from typing import List, Optional
+from __future__ import annotations
 
-from sliver.pb.commonpb import common_pb2
-
+from . import models
 from ._protocols import InteractiveObject
-from .protobuf import client_pb2, sliver_pb2
+from .models import protobuf_to_pydantic
 
 
 class BaseInteractiveCommands:
-    async def ping(self: InteractiveObject) -> sliver_pb2.Ping:
+    async def ping(self: InteractiveObject) -> models.sliverpb.Ping:
         """Send a round trip message to the implant (does NOT use ICMP)
 
-        :return: Protobuf ping object
-        :rtype: sliver_pb2.Ping
+        :return: Pydantic ping model
+        :rtype: models.sliverpb.Ping
         """
         return await self._stub.Ping(
-            self._request(sliver_pb2.Ping()), timeout=self.timeout
+            self._request(models.sliverpb.Ping()), timeout=self.timeout
         )
 
-    async def ps(self: InteractiveObject) -> List[common_pb2.Process]:
+    async def ps(self: InteractiveObject) -> models.sliverpb.Ps:
         """List the processes of the remote system
 
-        :return: Ps protobuf object
-        :rtype: List[common_pb2.Process]
+        :return: Pydantic process-list model
+        :rtype: models.sliverpb.Ps
         """
-        ps = sliver_pb2.PsReq()
-        processes = await self._stub.Ps(self._request(ps), timeout=self.timeout)
-        return list(processes.Processes)
+        ps = models.sliverpb.PsReq()
+        return await self._stub.Ps(self._request(ps), timeout=self.timeout)
 
     async def terminate(
         self: InteractiveObject, pid: int, force=False
-    ) -> sliver_pb2.Terminate:
+    ) -> models.sliverpb.Terminate:
         """Terminate a remote process
 
         :param pid: The process ID to terminate.
         :type pid: int
         :param force: Force termination of the process, defaults to False
         :type force: bool, optional
-        :return: Protobuf terminate object
-        :rtype: sliver_pb2.Terminate
+        :return: Pydantic terminate model
+        :rtype: models.sliverpb.Terminate
         """
-        terminator = sliver_pb2.TerminateReq(Pid=pid, Force=force)
+        terminator = models.sliverpb.TerminateReq(pid=pid, force=force)
         return await self._stub.Terminate(
             self._request(terminator), timeout=self.timeout
         )
 
-    async def ifconfig(self: InteractiveObject) -> sliver_pb2.Ifconfig:
+    async def ifconfig(self: InteractiveObject) -> models.sliverpb.Ifconfig:
         """Get network interface configuration information about the remote system
 
-        :return: Protobuf ifconfig object
-        :rtype: sliver_pb2.Ifconfig
+        :return: Pydantic interface-configuration model
+        :rtype: models.sliverpb.Ifconfig
         """
         return await self._stub.Ifconfig(
-            self._request(sliver_pb2.IfconfigReq()), timeout=self.timeout
+            self._request(models.sliverpb.IfconfigReq()), timeout=self.timeout
         )
 
     async def netstat(
@@ -77,7 +75,7 @@ class BaseInteractiveCommands:
         ipv4: bool,
         ipv6: bool,
         listening=True,
-    ) -> sliver_pb2.Netstat:
+    ) -> models.sliverpb.Netstat:
         """Get information about network connections on the remote system.
 
         :param tcp: Get TCP information
@@ -90,48 +88,48 @@ class BaseInteractiveCommands:
         :type ipv6: bool
         :param listening: Get listening connection information, defaults to True
         :type listening: bool, optional
-        :return: Protobuf netstat object
-        :rtype: List[sliver_pb2.SockTabEntry]
+        :return: Pydantic network-connection model
+        :rtype: models.sliverpb.Netstat
         """
-        net = sliver_pb2.NetstatReq(
-            TCP=tcp, UDP=udp, IP4=ipv4, IP6=ipv6, Listening=listening
+        net = models.sliverpb.NetstatReq(
+            tcp=tcp, udp=udp, ip4=ipv4, ip6=ipv6, listening=listening
         )
         return await self._stub.Netstat(self._request(net), timeout=self.timeout)
 
-    async def ls(self: InteractiveObject, remote_path: str = ".") -> sliver_pb2.Ls:
+    async def ls(self: InteractiveObject, remote_path: str = ".") -> models.sliverpb.Ls:
         """Get a directory listing from the remote system
 
         :param remote_path: Remote path
         :type remote_path: str
-        :return: Protobuf ls object
-        :rtype: sliver_pb2.Ls
+        :return: Pydantic directory-listing model
+        :rtype: models.sliverpb.Ls
         """
-        ls = sliver_pb2.LsReq(Path=remote_path)
+        ls = models.sliverpb.LsReq(path=remote_path)
         return await self._stub.Ls(self._request(ls), timeout=self.timeout)
 
-    async def cd(self: InteractiveObject, remote_path: str) -> sliver_pb2.Pwd:
+    async def cd(self: InteractiveObject, remote_path: str) -> models.sliverpb.Pwd:
         """Change the current working directory of the implant
 
         :param remote_path: Remote path
         :type remote_path: str
-        :return: Protobuf pwd object
-        :rtype: sliver_pb2.Pwd
+        :return: Pydantic working-directory model
+        :rtype: models.sliverpb.Pwd
         """
-        cd = sliver_pb2.CdReq(Path=remote_path)
+        cd = models.sliverpb.CdReq(path=remote_path)
         return await self._stub.Cd(self._request(cd), timeout=self.timeout)
 
-    async def pwd(self: InteractiveObject) -> sliver_pb2.Pwd:
+    async def pwd(self: InteractiveObject) -> models.sliverpb.Pwd:
         """Get the implant's current working directory
 
-        :return: Protobuf pwd object
-        :rtype: sliver_pb2.Pwd
+        :return: Pydantic working-directory model
+        :rtype: models.sliverpb.Pwd
         """
-        pwd = sliver_pb2.PwdReq()
+        pwd = models.sliverpb.PwdReq()
         return await self._stub.Pwd(self._request(pwd), timeout=self.timeout)
 
     async def rm(
         self: InteractiveObject, remote_path: str, recursive=False, force=False
-    ) -> sliver_pb2.Rm:
+    ) -> models.sliverpb.Rm:
         """Remove a directory or file(s)
 
         :param remote_path: Remote path
@@ -140,36 +138,36 @@ class BaseInteractiveCommands:
         :type recursive: bool, optional
         :param force: Forcefully remove the file(s), defaults to False
         :type force: bool, optional
-        :return: Protobuf rm object
-        :rtype: sliver_pb2.Rm
+        :return: Pydantic removal-result model
+        :rtype: models.sliverpb.Rm
         """
-        rm = sliver_pb2.RmReq(Path=remote_path, Recursive=recursive, Force=force)
+        rm = models.sliverpb.RmReq(path=remote_path, recursive=recursive, force=force)
         return await self._stub.Rm(self._request(rm), timeout=self.timeout)
 
-    async def mkdir(self: InteractiveObject, remote_path: str) -> sliver_pb2.Mkdir:
+    async def mkdir(self: InteractiveObject, remote_path: str) -> models.sliverpb.Mkdir:
         """Make a directory on the remote file system
 
         :param remote_path: Directory to create
         :type remote_path: str
-        :return: Protobuf Mkdir object
-        :rtype: sliver_pb2.Mkdir
+        :return: Pydantic directory-creation model
+        :rtype: models.sliverpb.Mkdir
         """
-        make = sliver_pb2.MkdirReq(Path=remote_path)
+        make = models.sliverpb.MkdirReq(path=remote_path)
         return await self._stub.Mkdir(self._request(make), timeout=self.timeout)
 
     async def download(
         self: InteractiveObject, remote_path: str, recurse: bool = False
-    ) -> sliver_pb2.Download:
+    ) -> models.sliverpb.Download:
         """Download a file or directory from the remote file system
 
         :param remote_path: File to download
         :type remote_path: str
         :param recurse: Download all files in a directory
         :type recurse: bool
-        :return: Protobuf Download object
-        :rtype: sliver_pb2.Download
+        :return: Pydantic download model
+        :rtype: models.sliverpb.Download
         """
-        download = sliver_pb2.DownloadReq(Path=remote_path, Recurse=recurse)
+        download = models.sliverpb.DownloadReq(path=remote_path, recurse=recurse)
         return await self._stub.Download(self._request(download), timeout=self.timeout)
 
     async def upload(
@@ -177,7 +175,7 @@ class BaseInteractiveCommands:
         remote_path: str,
         data: bytes,
         is_ioc: bool = False,
-    ) -> sliver_pb2.Upload:
+    ) -> models.sliverpb.Upload:
         """Write data to specified path on remote file system
 
         :param remote_path: Remote path
@@ -186,28 +184,30 @@ class BaseInteractiveCommands:
         :type data: bytes
         :param is_ioc: Data is an indicator of compromise, defaults to False
         :type is_ioc: bool, optional
-        :return: Protobuf Upload object
-        :rtype: sliver_pb2.Upload
+        :return: Pydantic upload model
+        :rtype: models.sliverpb.Upload
         """
-        upload = sliver_pb2.UploadReq(Path=remote_path, Data=data, IsIOC=is_ioc)
+        upload = models.sliverpb.UploadReq(path=remote_path, data=data, is_ioc=is_ioc)
         return await self._stub.Upload(self._request(upload), timeout=self.timeout)
 
-    async def process_dump(self: InteractiveObject, pid: int) -> sliver_pb2.ProcessDump:
+    async def process_dump(
+        self: InteractiveObject, pid: int
+    ) -> models.sliverpb.ProcessDump:
         """Dump a remote process' memory
 
         :param pid: PID of the process to dump
         :type pid: int
-        :return: Protobuf ProcessDump object
-        :rtype: sliver_pb2.ProcessDump
+        :return: Pydantic process-dump model
+        :rtype: models.sliverpb.ProcessDump
         """
-        procdump = sliver_pb2.ProcessDumpReq(Pid=pid)
+        procdump = models.sliverpb.ProcessDumpReq(pid=pid)
         return await self._stub.ProcessDump(
             self._request(procdump), timeout=self.timeout
         )
 
     async def run_as(
         self: InteractiveObject, username: str, process_name: str, args: str
-    ) -> sliver_pb2.RunAs:
+    ) -> models.sliverpb.RunAs:
         """Run a command as another user on the remote system
 
         :param username: User to run process as
@@ -216,57 +216,62 @@ class BaseInteractiveCommands:
         :type process_name: str
         :param args: Arguments to process
         :type args: str
-        :return: Protobuf RunAs object
-        :rtype: sliver_pb2.RunAs
+        :return: Pydantic run-as result model
+        :rtype: models.sliverpb.RunAs
         """
-        run_as = sliver_pb2.RunAsReq(
-            Username=username, ProcessName=process_name, Args=args
+        run_as = models.sliverpb.RunAsReq(
+            username=username, process_name=process_name, args=args
         )
         return await self._stub.RunAs(self._request(run_as), timeout=self.timeout)
 
     async def impersonate(
         self: InteractiveObject, username: str
-    ) -> sliver_pb2.Impersonate:
+    ) -> models.sliverpb.Impersonate:
         """Impersonate a user using tokens (Windows only)
 
         :param username: User to impersonate
         :type username: str
-        :return: Protobuf Impersonate object
-        :rtype: sliver_pb2.Impersonate
+        :return: Pydantic impersonation-result model
+        :rtype: models.sliverpb.Impersonate
         """
-        impersonate = sliver_pb2.ImpersonateReq(Username=username)
+        impersonate = models.sliverpb.ImpersonateReq(username=username)
         return await self._stub.Impersonate(
             self._request(impersonate), timeout=self.timeout
         )
 
-    async def revert_to_self(self: InteractiveObject) -> sliver_pb2.RevToSelf:
+    async def revert_to_self(self: InteractiveObject) -> models.sliverpb.RevToSelf:
         """Revert to self from impersonation context
 
-        :return: Protobuf RevToSelf object
-        :rtype: sliver_pb2.RevToSelf
+        :return: Pydantic revert-result model
+        :rtype: models.sliverpb.RevToSelf
         """
         return await self._stub.RevToSelf(
-            self._request(sliver_pb2.RevToSelfReq()), timeout=self.timeout
+            self._request(models.sliverpb.RevToSelfReq()), timeout=self.timeout
         )
 
     async def get_system(
-        self: InteractiveObject, hosting_process: str, config: client_pb2.ImplantConfig
-    ) -> sliver_pb2.GetSystem:
+        self: InteractiveObject,
+        hosting_process: str,
+        config: models.clientpb.ImplantConfig,
+    ) -> models.sliverpb.GetSystem:
         """Attempt to get SYSTEM (Windows only)
 
         :param hosting_process: Hosting process to attempt gaining privileges
         :type hosting_process: str
         :param config: Implant configuration to be injected into the hosting process
-        :type config: client_pb2.ImplantConfig
-        :return: Protobuf GetSystem object
-        :rtype: sliver_pb2.GetSystem
+        :type config: models.clientpb.ImplantConfig
+        :return: Pydantic privilege-escalation result model
+        :rtype: models.sliverpb.GetSystem
         """
-        system = client_pb2.GetSystemReq(HostingProcess=hosting_process, Config=config)
+        system = models.clientpb.GetSystemReq(
+            hosting_process=hosting_process,
+            config=protobuf_to_pydantic(config),
+        )
         return await self._stub.GetSystem(self._request(system), timeout=self.timeout)
 
     async def execute_shellcode(
         self: InteractiveObject, data: bytes, rwx: bool, pid: int, encoder=""
-    ) -> sliver_pb2.Task:
+    ) -> models.sliverpb.Task:
         """Execute shellcode in-memory
 
         :param data: Shellcode buffer
@@ -277,10 +282,12 @@ class BaseInteractiveCommands:
         :type pid: int
         :param encoder: Encoder ('', 'gzip'), defaults to ''
         :type encoder: str, optional
-        :return: Protobuf Task object
-        :rtype: sliver_pb2.Task
+        :return: Pydantic task model
+        :rtype: models.sliverpb.Task
         """
-        task = sliver_pb2.TaskReq(Encoder=encoder, Data=data, RWXPages=rwx, Pid=pid)
+        task = models.sliverpb.TaskReq(
+            encoder=encoder, data=data, rwx_pages=rwx, pid=pid
+        )
         return await self._stub.Task(self._request(task), timeout=self.timeout)
 
     async def msf(
@@ -290,9 +297,10 @@ class BaseInteractiveCommands:
         lport: int,
         encoder: str,
         iterations: int,
-    ) -> None:
-        """Execute Metasploit payload on remote system, the payload will be generated by the server
-        based on the parameters to this function. The server must be configured with Metasploit.
+    ) -> models.sliverpb.Task:
+        """Generate and execute a Metasploit payload on the remote system.
+
+        The server must be configured with Metasploit.
 
         :param payload: Payload to generate
         :type payload: str
@@ -305,12 +313,13 @@ class BaseInteractiveCommands:
         :param iterations: Iterations for Metasploit encoder
         :type iterations: int
         """
-        msf = client_pb2.MSFReq()
-        msf.Payload = payload
-        msf.LHost = lhost
-        msf.LPort = lport
-        msf.Encoder = encoder
-        msf.Iterations = iterations
+        msf = models.clientpb.MSFReq(
+            payload=payload,
+            l_host=lhost,
+            l_port=lport,
+            encoder=encoder,
+            iterations=iterations,
+        )
         return await self._stub.Msf(self._request(msf), timeout=self.timeout)
 
     async def msf_remote(
@@ -321,9 +330,10 @@ class BaseInteractiveCommands:
         encoder: str,
         iterations: int,
         pid: int,
-    ) -> None:
-        """Execute Metasploit payload in a remote process, the payload will be generated by the server
-        based on the parameters to this function. The server must be configured with Metasploit.
+    ) -> models.sliverpb.Task:
+        """Generate and execute a Metasploit payload in a remote process.
+
+        The server must be configured with Metasploit.
 
         :param payload: Payload to generate
         :type payload: str
@@ -338,32 +348,33 @@ class BaseInteractiveCommands:
         :param pid: Process ID to inject the payload into
         :type pid: int
         """
-        msf = client_pb2.MSFRemoteReq()
-        msf.Payload = payload
-        msf.LHost = lhost
-        msf.LPort = lport
-        msf.Encoder = encoder
-        msf.Iterations = iterations
-        msf.PID = pid
-        return await self._stub.Msf(self._request(msf), timeout=self.timeout)
+        msf = models.clientpb.MSFRemoteReq(
+            payload=payload,
+            l_host=lhost,
+            l_port=lport,
+            encoder=encoder,
+            iterations=iterations,
+            pid=pid,
+        )
+        return await self._stub.MsfRemote(self._request(msf), timeout=self.timeout)
 
     async def execute_assembly(
         self: InteractiveObject,
         assembly: bytes,
-        arguments: str,
+        arguments: list[str],
         process: str,
         is_dll: bool,
         arch: str,
         class_name: str,
         method: str,
         app_domain: str,
-    ) -> sliver_pb2.ExecuteAssembly:
+    ) -> models.sliverpb.ExecuteAssembly:
         """Execute a .NET assembly in-memory on the remote system
 
         :param assembly: A buffer of the .NET assembly to execute
         :type assembly: bytes
         :param arguments: Arguments to the .NET assembly
-        :type arguments: str
+        :type arguments: list[str]
         :param process: Process to execute assembly
         :type process: str
         :param is_dll: Is assembly a DLL
@@ -376,44 +387,46 @@ class BaseInteractiveCommands:
         :type method: str
         :param app_domain: AppDomain
         :type app_domain: str
-        :return: Protobuf ExecuteAssembly object
-        :rtype: sliver_pb2.ExecuteAssembly
+        :return: Pydantic assembly-execution result model
+        :rtype: models.sliverpb.ExecuteAssembly
         """
-        asm = sliver_pb2.ExecuteAssemblyReq()
-        asm.Assembly = assembly
-        asm.Arguments = arguments
-        asm.Process = process
-        asm.IsDLL = is_dll
-        asm.Arch = arch
-        asm.ClassName = class_name
-        asm.AppDomain = app_domain
+        asm = models.sliverpb.ExecuteAssemblyReq(
+            assembly=assembly,
+            arguments=arguments,
+            process=process,
+            is_dll=is_dll,
+            arch=arch,
+            class_name=class_name,
+            method=method,
+            app_domain=app_domain,
+        )
         return await self._stub.ExecuteAssembly(
             self._request(asm), timeout=self.timeout
         )
 
     async def migrate(
-        self: InteractiveObject, pid: int, config: client_pb2.ImplantConfig
-    ) -> sliver_pb2.Migrate:
+        self: InteractiveObject, pid: int, config: models.clientpb.ImplantConfig
+    ) -> models.sliverpb.Migrate:
         """Migrate implant to another process
 
         :param pid: Process ID to inject implant into
         :type pid: int
         :param config: Implant configuration to inject into the remote process
-        :type config: client_pb2.ImplantConfig
-        :return: Protobuf Migrate object
-        :rtype: sliver_pb2.Migrate
+        :type config: models.clientpb.ImplantConfig
+        :return: Pydantic migration-result model
+        :rtype: models.sliverpb.Migrate
         """
-        migrate = client_pb2.MigrateReq()
-        migrate.Pid = pid
-        migrate.Config.CopyFrom(config)
+        migrate = models.clientpb.MigrateReq(
+            pid=pid, config=protobuf_to_pydantic(config)
+        )
         return await self._stub.Migrate(self._request(migrate), timeout=self.timeout)
 
     async def execute(
         self: InteractiveObject,
         exe: str,
-        args: Optional[List[str]],
+        args: list[str] | None,
         output: bool = True,
-    ) -> sliver_pb2.Execute:
+    ) -> models.sliverpb.Execute:
         """Execute a command/subprocess on the remote system
 
         :param exe: Command/subprocess to execute
@@ -422,12 +435,12 @@ class BaseInteractiveCommands:
         :type args: List[str]
         :param output: Enable capturing command/subprocess stdout
         :type output: bool
-        :return: Protobuf Execute object
-        :rtype: sliver_pb2.Execute
+        :return: Pydantic execution-result model
+        :rtype: models.sliverpb.Execute
         """
         if not args:
             args = []
-        execute_req = sliver_pb2.ExecuteReq(Path=exe, Args=args, Output=output)
+        execute_req = models.sliverpb.ExecuteReq(path=exe, args=args, output=output)
         return await self._stub.Execute(
             self._request(execute_req), timeout=self.timeout
         )
@@ -436,31 +449,31 @@ class BaseInteractiveCommands:
         self: InteractiveObject,
         data: bytes,
         process_name: str,
-        arguments: str,
+        arguments: list[str],
         entry_point: str,
         kill: bool,
-    ) -> sliver_pb2.Sideload:
-        """Sideload a shared library into a remote process using a platform specific in-memory loader (Windows, MacOS, Linux only)
+    ) -> models.sliverpb.Sideload:
+        """Sideload a shared library using the platform's in-memory loader.
 
         :param data: Shared library raw bytes
         :type data: bytes
         :param process_name: Process name to sideload library into
         :type process_name: str
         :param arguments: Arguments to the shared library
-        :type arguments: str
+        :type arguments: list[str]
         :param entry_point: Entrypoint of the shared library
         :type entry_point: str
-        :param kill: Kill normal execution of the process when side loading the shared library
+        :param kill: Kill normal execution after sideloading the shared library
         :type kill: bool
-        :return: Protobuf Sideload object
-        :rtype: sliver_pb2.Sideload
+        :return: Pydantic sideload-result model
+        :rtype: models.sliverpb.Sideload
         """
-        side = sliver_pb2.SideloadReq(
-            Data=data,
-            ProcessName=process_name,
-            Args=arguments,
-            EntryPoint=entry_point,
-            Kill=kill,
+        side = models.sliverpb.SideloadReq(
+            data=data,
+            process_name=process_name,
+            args=arguments,
+            entry_point=entry_point,
+            kill=kill,
         )
         return await self._stub.Sideload(self._request(side), timeout=self.timeout)
 
@@ -468,10 +481,10 @@ class BaseInteractiveCommands:
         self: InteractiveObject,
         data: bytes,
         process_name: str,
-        arguments: str,
+        arguments: list[str],
         entry_point: str,
         kill: bool,
-    ) -> sliver_pb2.SpawnDll:
+    ) -> models.sliverpb.SpawnDll:
         """Spawn a DLL on the remote system from memory (Windows only)
 
         :param data: DLL raw bytes
@@ -479,41 +492,43 @@ class BaseInteractiveCommands:
         :param process_name: Process name to spawn DLL into
         :type process_name: str
         :param arguments: Arguments to the DLL
-        :type arguments: str
+        :type arguments: list[str]
         :param entry_point: Entrypoint of the DLL
         :type entry_point: str
         :param kill: Kill normal execution of the remote process when spawing the DLL
         :type kill: bool
-        :return: Protobuf SpawnDll object
-        :rtype: sliver_pb2.SpawnDll
+        :return: Pydantic DLL-execution result model
+        :rtype: models.sliverpb.SpawnDll
         """
-        spawn = sliver_pb2.InvokeSpawnDllReq(
-            Data=data,
-            ProcessName=process_name,
-            Args=arguments,
-            EntryPoint=entry_point,
-            Kill=kill,
+        spawn = models.sliverpb.InvokeSpawnDllReq(
+            data=data,
+            process_name=process_name,
+            args=arguments,
+            entry_point=entry_point,
+            kill=kill,
         )
         return await self._stub.SpawnDll(self._request(spawn), timeout=self.timeout)
-    
+
     async def list_extensions(
         self: InteractiveObject,
-    ) -> sliver_pb2.ListExtensions:
+    ) -> models.sliverpb.ListExtensions:
         """List extensions
 
-        :return: Protobuf ListExtensions object
-        :rtype: sliver_pb2.ListExtensions
+        :return: Pydantic extension-list model
+        :rtype: models.sliverpb.ListExtensions
         """
-        listex = sliver_pb2.ListExtensionsReq()
-        return await self._stub.ListExtensions(self._request(listex), timeout=self.timeout)
+        listex = models.sliverpb.ListExtensionsReq()
+        return await self._stub.ListExtensions(
+            self._request(listex), timeout=self.timeout
+        )
 
     async def register_extension(
         self: InteractiveObject,
         name: str,
         data: bytes,
         goos: str,
-        init: str
-    ) -> sliver_pb2.RegisterExtension:
+        init: str,
+    ) -> models.sliverpb.RegisterExtension:
         """Call an extension
 
         :param name: Extension name
@@ -523,24 +538,26 @@ class BaseInteractiveCommands:
         :param goos: OS
         :type goos: str
         :param init: Init entrypoint to run
-        :type init: str        
-        :return: Protobuf RegisterExtension object
-        :rtype: sliver_pb2.RegisterExtension
+        :type init: str
+        :return: Pydantic extension-registration result model
+        :rtype: models.sliverpb.RegisterExtension
         """
-        regext = sliver_pb2.RegisterExtensionReq(
-            Name = name,
-            Data = data,
-            OS = goos,
-            Init = init
+        regext = models.sliverpb.RegisterExtensionReq(
+            name=name,
+            data=data,
+            os=goos,
+            init=init,
         )
-        return await self._stub.RegisterExtension(self._request(regext), timeout=self.timeout)
+        return await self._stub.RegisterExtension(
+            self._request(regext), timeout=self.timeout
+        )
 
     async def call_extension(
         self: InteractiveObject,
         name: str,
         export: str,
         ext_args: bytes,
-    ) -> sliver_pb2.CallExtension:
+    ) -> models.sliverpb.CallExtension:
         """Call an extension
 
         :param name: Extension name
@@ -549,29 +566,31 @@ class BaseInteractiveCommands:
         :type export: str
         :param ext_args: Extension argument buffer
         :type ext_args: bytes
-        :return: Protobuf CallExtension object
-        :rtype: sliver_pb2.CallExtension
+        :return: Pydantic extension-result model
+        :rtype: models.sliverpb.CallExtension
         """
-        callex = sliver_pb2.CallExtensionReq(
-            Name = name,
-            Export = export,
-            Args = ext_args
+        callex = models.sliverpb.CallExtensionReq(
+            name=name,
+            export=export,
+            args=ext_args,
         )
-        return await self._stub.CallExtension(self._request(callex), timeout=self.timeout)
-    
-    async def screenshot(self: InteractiveObject) -> sliver_pb2.Screenshot:
+        return await self._stub.CallExtension(
+            self._request(callex), timeout=self.timeout
+        )
+
+    async def screenshot(self: InteractiveObject) -> models.sliverpb.Screenshot:
         """Take a screenshot of the remote system, screenshot data is PNG formatted
 
-        :return: Protobuf Screenshot object
-        :rtype: sliver_pb2.Screenshot
+        :return: Pydantic screenshot model
+        :rtype: models.sliverpb.Screenshot
         """
         return await self._stub.Screenshot(
-            self._request(sliver_pb2.ScreenshotReq()), timeout=self.timeout
+            self._request(models.sliverpb.ScreenshotReq()), timeout=self.timeout
         )
 
     async def make_token(
         self: InteractiveObject, username: str, password: str, domain: str
-    ) -> sliver_pb2.MakeToken:
+    ) -> models.sliverpb.MakeToken:
         """Make a Windows user token from a valid login (Windows only)
 
         :param username: Username
@@ -580,55 +599,55 @@ class BaseInteractiveCommands:
         :type password: str
         :param domain: Domain
         :type domain: str
-        :return: Protobuf MakeToken object
-        :rtype: sliver_pb2.MakeToken
+        :return: Pydantic token-creation result model
+        :rtype: models.sliverpb.MakeToken
         """
-        make = sliver_pb2.MakeTokenReq(
-            Username=username, Password=password, Domain=domain
+        make = models.sliverpb.MakeTokenReq(
+            username=username, password=password, domain=domain
         )
         return await self._stub.MakeToken(self._request(make), timeout=self.timeout)
 
-    async def get_env(self: InteractiveObject, name: str) -> sliver_pb2.EnvInfo:
+    async def get_env(self: InteractiveObject, name: str) -> models.sliverpb.EnvInfo:
         """Get an environment variable
 
         :param name: Name of the variable
         :type name: str
-        :return: Protobuf EnvInfo object
-        :rtype: sliver_pb2.EnvInfo
+        :return: Pydantic environment-variable model
+        :rtype: models.sliverpb.EnvInfo
         """
-        env = sliver_pb2.EnvReq(Name=name)
+        env = models.sliverpb.EnvReq(name=name)
         return await self._stub.GetEnv(self._request(env), timeout=self.timeout)
 
     async def set_env(
         self: InteractiveObject, key: str, value: str
-    ) -> sliver_pb2.SetEnv:
+    ) -> models.sliverpb.SetEnv:
         """Set an environment variable
 
-        :param name: Name of the environment variable
-        :type name: str
+        :param key: Name of the environment variable
+        :type key: str
         :param value: Value of the environment variable
         :type value: str
-        :return: Protobuf SetEnv object
-        :rtype: sliver_pb2.SetEnv
+        :return: Pydantic environment-update result model
+        :rtype: models.sliverpb.SetEnv
         """
-        env_var = common_pb2.EnvVar(Key=key, Value=value)
-        env_req = sliver_pb2.SetEnvReq(Variable=env_var)
+        env_var = models.commonpb.EnvVar(key=key, value=value)
+        env_req = models.sliverpb.SetEnvReq(variable=env_var)
         return await self._stub.SetEnv(self._request(env_req), timeout=self.timeout)
 
-    async def unset_env(self: InteractiveObject, key: str) -> sliver_pb2.UnsetEnv:
+    async def unset_env(self: InteractiveObject, key: str) -> models.sliverpb.UnsetEnv:
         """Unset an environment variable
 
-        :param value: Value of the environment variable
-        :type value: str
-        :return: Protobuf SetEnv object
-        :rtype: sliver_pb2.SetEnv
+        :param key: Name of the environment variable
+        :type key: str
+        :return: Pydantic environment-update result model
+        :rtype: models.sliverpb.UnsetEnv
         """
-        env = sliver_pb2.UnsetEnvReq(Name=key)
+        env = models.sliverpb.UnsetEnvReq(name=key)
         return await self._stub.UnsetEnv(self._request(env), timeout=self.timeout)
 
     async def registry_read(
         self: InteractiveObject, hive: str, reg_path: str, key: str, hostname: str
-    ) -> sliver_pb2.RegistryRead:
+    ) -> models.sliverpb.RegistryRead:
         """Read a value from the remote system's registry (Windows only)
 
         :param hive: Registry hive to read value from
@@ -639,14 +658,12 @@ class BaseInteractiveCommands:
         :type key: str
         :param hostname: Hostname
         :type hostname: str
-        :return: Protobuf RegistryRead object
-        :rtype: sliver_pb2.RegistryRead
+        :return: Pydantic registry-read result model
+        :rtype: models.sliverpb.RegistryRead
         """
-        reg = sliver_pb2.RegistryReadReq()
-        reg.Hive = hive
-        reg.Path = reg_path
-        reg.Key = key
-        reg.Hostname = hostname
+        reg = models.sliverpb.RegistryReadReq(
+            hive=hive, path=reg_path, key=key, hostname=hostname
+        )
         return await self._stub.RegistryRead(self._request(reg), timeout=self.timeout)
 
     async def registry_write(
@@ -659,8 +676,8 @@ class BaseInteractiveCommands:
         byte_value: bytes,
         dword_value: int,
         qword_value: int,
-        reg_type: sliver_pb2.RegistryType.ValueType,
-    ) -> sliver_pb2.RegistryWrite:
+        reg_type: models.sliverpb.RegistryType,
+    ) -> models.sliverpb.RegistryWrite:
         """Write a value to the remote system's registry (Windows only)
 
         :param hive: Registry hive to write the key/value to
@@ -680,36 +697,27 @@ class BaseInteractiveCommands:
         :param qword_value: QWORD value to write (ignored for non-QWORD key)
         :type qword_value: int
         :param reg_type: Type of registry key to write
-        :type reg_type: sliver_pb2.RegistryType
-        :return: Protobuf RegistryWrite object
-        :rtype: sliver_pb2.RegistryWrite
+        :type reg_type: models.sliverpb.RegistryType
+        :return: Pydantic registry-write result model
+        :rtype: models.sliverpb.RegistryWrite
         """
-        reg = sliver_pb2.RegistryWriteReq(
-            Hive=hive,
-            Path=reg_path,
-            Key=key,
-            Hostname=hostname,
-            StringValue=string_value,
-            ByteValue=byte_value,
-            DWordValue=dword_value,
-            QWordValue=qword_value,
-            Type=int(reg_type),
+        reg = models.sliverpb.RegistryWriteReq(
+            hive=hive,
+            path=reg_path,
+            key=key,
+            hostname=hostname,
+            string_value=string_value,
+            byte_value=byte_value,
+            d_word_value=dword_value,
+            q_word_value=qword_value,
+            type=int(reg_type),
         )
-        reg.Hive = hive
-        reg.Path = reg_path
-        reg.Key = key
-        reg.Hostname = hostname
-        reg.StringValue = string_value
-        reg.ByteValue = byte_value
-        reg.DWordValue = dword_value
-        reg.QWordValue = qword_value
-        reg.Type = reg_type
 
         return await self._stub.RegistryWrite(self._request(reg), timeout=self.timeout)
 
     async def registry_create_key(
         self: InteractiveObject, hive: str, reg_path: str, key: str, hostname: str
-    ) -> sliver_pb2.RegistryCreateKey:
+    ) -> models.sliverpb.RegistryCreateKey:
         """Create a registry key on the remote system (Windows only)
 
         :param hive: Registry hive to create key in
@@ -720,11 +728,11 @@ class BaseInteractiveCommands:
         :type key: str
         :param hostname: Hostname
         :type hostname: str
-        :return: Protobuf RegistryCreateKey object
-        :rtype: sliver_pb2.RegistryCreateKey
+        :return: Pydantic registry-create result model
+        :rtype: models.sliverpb.RegistryCreateKey
         """
-        reg = sliver_pb2.RegistryCreateKeyReq(
-            Hive=hive, Path=reg_path, Key=key, Hostname=hostname
+        reg = models.sliverpb.RegistryCreateKeyReq(
+            hive=hive, path=reg_path, key=key, hostname=hostname
         )
         return await self._stub.RegistryCreateKey(
             self._request(reg), timeout=self.timeout

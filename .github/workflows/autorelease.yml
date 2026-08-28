@@ -1,53 +1,64 @@
-name: SliverPy
+name: Release
+
 on:
   push:
-    tags: v[0-9]+.[0-9]+.[0-9]+
-    branches: master
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
 
 jobs:
-
   build:
-    name: Build
+    name: Build and publish
     runs-on: ubuntu-latest
-    if: startsWith( github.ref, 'refs/tags/v')
     timeout-minutes: 45
 
     steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-    - id: install-secret-key
-      name: GPG Secret Key(s)
-      run: |
-        cat <(echo -e "${{ secrets.SLIVERPY_GPG }}") | gpg --batch --import
-        gpg --list-secret-keys --keyid-format LONG
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: false
+          python-version: "3.12"
+          version: "0.12.7"
 
-    - uses: actions/setup-python@v2
-      with:
-        python-version: '3.x'
-        architecture: 'x64'
+      - name: Verify release metadata
+        run: |
+          test "v$(uv version --short)" = "$GITHUB_REF_NAME"
+          uv lock --check
 
-    - name: Python Setup
-      run: python3 -m pip install --upgrade build twine hatch
+      - name: Install release tools
+        run: uv sync --frozen --only-group release
 
-    - name: Check Out Code
-      uses: actions/checkout@v2
+      - name: Build distributions
+        run: uv build
 
-    - name: Git Fetch Tags
-      run: git fetch --prune --unshallow --tags -f
+      - name: Check distributions
+        run: uv run --frozen --only-group release twine check dist/*
 
-    - name: Package
-      run: hatch build
+      - id: install-secret-key
+        name: Import GPG signing key
+        env:
+          SLIVERPY_GPG: "${{ secrets.SLIVERPY_GPG }}"
+        run: |
+          printf '%s' "$SLIVERPY_GPG" | gpg --batch --import
+          gpg --list-secret-keys --keyid-format LONG
 
-    - name: Github Release
-      uses: "marvinpinto/action-automatic-releases@latest"
-      with:
-        repo_token: "${{ secrets.GITHUB_TOKEN }}"
-        prerelease: false
-        files: |
-          ./dist/*
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: "${{ github.token }}"
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --verify-tag
 
-    - name: PyPI Upload
-      env:
-        TWINE_NON_INTERACTIVE: 1
-        TWINE_USERNAME: __token__
-        TWINE_PASSWORD: "${{ secrets.TWINE_PASSWORD }}"
-      run: python3 -m twine upload --sign --identity 9F68D30C -r pypi dist/*
+      - name: Upload to PyPI
+        env:
+          TWINE_NON_INTERACTIVE: 1
+          TWINE_PASSWORD: "${{ secrets.TWINE_PASSWORD }}"
+          TWINE_USERNAME: __token__
+        run: >-
+          uv run --frozen --only-group release twine upload
+          --sign --identity 9F68D30C --repository pypi dist/*

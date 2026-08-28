@@ -1,8 +1,8 @@
 # SliverPy
 
-SliverPy is a Python gRPC client library for [Sliver](https://github.com/BishopFox/sliver). SliverPy can be used to automate any operator interaction with Sliver and connects to servers using gRPC over Mutual TLS (i.e., multiplayer) using Sliver operator configuration files. [For more details, please see the project documentation](http://sliverpy.rtfd.io/).
+SliverPy is an async Python client library for [Sliver](https://github.com/BishopFox/sliver). It automates operator interactions over Sliver's mutually authenticated gRPC API and exposes descriptor-generated [Pydantic](https://docs.pydantic.dev/) models instead of generated protobuf messages at the public API. [See the project documentation for more details](https://sliverpy.readthedocs.io/).
 
-⚠️ Not all features in Sliver v1.5+ are supported yet.
+The v0.1 API targets the current Sliver `master` protobuf definitions. Not every Sliver feature has a high-level convenience method yet; the Pydantic-aware RPC stub and raw generated gRPC stub are available for advanced use.
 
 [![SliverPy](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml/badge.svg)](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml)
 [![Documentation Status](https://readthedocs.org/projects/sliverpy/badge/?version=latest)](https://sliverpy.readthedocs.io/en/latest/?badge=latest)
@@ -10,9 +10,17 @@ SliverPy is a Python gRPC client library for [Sliver](https://github.com/BishopF
 
 ### Install
 
-Install the package using pip, for best compatibility use Sliver Server v1.5.29 or later:
+Add the package to a uv-managed Python 3.10 or newer project:
 
-`pip3 install sliver-py`
+```console
+uv add sliver-py
+```
+
+Installation with pip remains supported:
+
+```console
+python -m pip install sliver-py
+```
 
 #### Kali Linux / Fix OpenSSL Errors
 
@@ -44,8 +52,8 @@ async def main():
     sessions = await client.sessions()
     print('[*] Sessions: %r' % sessions)
     if len(sessions):
-        print('[*] Interacting with session %s', sessions[0].ID)
-        interact = await client.interact_session(sessions[0].ID)
+        print(f'[*] Interacting with session {sessions[0].name!r}')
+        interact = await client.interact_session(sessions[0].id)
         ls = await interact.ls()
         print('[*] ls: %r' % ls)
 
@@ -76,37 +84,80 @@ async def main():
     beacons = await client.beacons()
     print('[*] Beacons: %r' % beacons)
     if len(beacons):
-        print('[*] Interacting with beacon: %r' % beacons[0].ID)
-        interact = await client.interact_beacon(beacons[0].ID)
-        ls_task = await interact.ls()
-        print('[*] Created ls task: %r' % ls_task)
-        print('[*] Waiting for task results ...')
-        ls = await ls_task
+        print(f'[*] Interacting with beacon: {beacons[0].name!r}')
+        interact = await client.interact_beacon(beacons[0].id)
+        ls = await interact.ls()
         print('[*] ls: %r' % ls)
 
 if __name__ == '__main__':
     asyncio.run(main())
 ```
 
+## Pydantic models
+
+Every protobuf message has a Pydantic counterpart at `sliver.models.<package>.<Message>`. Model attributes and constructor arguments use Python `snake_case`; the original protobuf field names remain accepted as validation aliases for migration and wire-format interoperability.
+
+```python
+from sliver import models
+
+# Preferred v0.1 spelling.
+request = models.clientpb.RenameReq(
+    session_id="session-id",
+    name="web-server",
+)
+
+# Existing protobuf-shaped data is accepted at validation boundaries.
+same_request = models.clientpb.RenameReq.model_validate(
+    {"SessionID": "session-id", "Name": "web-server"}
+)
+assert same_request.session_id == request.session_id
+
+# Explicit conversion is available when integrating with protobuf-only code.
+protobuf_request = request.to_protobuf()
+request_again = models.clientpb.RenameReq.from_protobuf(protobuf_request)
+```
+
+After `SliverClient.connect()`, normal client and interactive calls convert model requests to protobuf and responses back to Pydantic automatically. Advanced callers can submit a model directly through the converted RPC stub:
+
+```python
+await client._stub.Rename(request)
+```
+
+If exact generated protobuf behavior is required, use the explicit raw escape hatch. Raw RPCs require raw protobuf requests and return raw protobuf responses:
+
+```python
+from sliver.pb.clientpb import client_pb2
+
+raw_request = client_pb2.RenameReq(
+    SessionID="session-id",
+    Name="web-server",
+)
+await client.raw_stub.Rename(raw_request)
+```
+
+See [Pydantic models and protobuf interoperability](https://sliverpy.readthedocs.io/en/latest/models.html) for namespaces, serialization, aliases, and conversion details.
+
 ## Development
 
-The development environment has migrated to [hatch](https://github.com/pypa/hatch) and the installation instructions can be found [here](https://hatch.pypa.io/latest/install/).
+SliverPy uses [uv](https://docs.astral.sh/uv/) for Python installation, dependency locking, virtual environments, and package builds. Clone the Sliver submodule and sync the locked development environment:
 
-### Note on VS Code
-
-Unfortunately, VS Code does not automatically detect hatch virtual environments yet due to how it structures environments. However, you can make setting the Python interpreter path easier by including the virtual environment directly in the folder by running these commands before setting up the virtual environment:
-
-```
-hatch config set dirs.env.virtual .venv
-hatch config update
+```console
+git clone --recurse-submodules https://github.com/moloch--/sliver-py.git
+cd sliver-py
+uv sync --frozen
 ```
 
-### Setting up Hatch environment
+uv creates the project environment at `.venv`; editors such as VS Code can use `.venv/bin/python` as the interpreter. Run project tools through uv so manual activation is unnecessary:
 
-Once installed, run `hatch -e dev shell` to enter the development environment. Hatch allows for scripts to be defined as well. These scripts are executed in the context of the defined environment. The current scripts defined are:
+```console
+uv run ruff format .
+uv run ruff check .
+uv run pytest
+uv run sphinx-build -W --keep-going -b html docs docs/_build/html
+uv build
+```
 
-
-- `hatch run dev:fmt`  -- runs `black` and `isort` for formatting
+When dependencies change, update `pyproject.toml` with `uv add` or `uv remove`, then commit the regenerated `uv.lock`. CI and release builds use `--frozen` or `--locked` to reject stale lockfiles.
 
 ### Docker/WSL2
 
@@ -119,13 +170,19 @@ In either case, `scripts/sliver_install.sh` contains a modified version of the o
 Alternatively, you can still choose to set up an external Sliver instance to connect to via Sliver's [multi-player mode](https://github.com/BishopFox/sliver/wiki/Multiplayer-Mode). The `sliver_install` script is purely for local development convenience.
 
 ### Updating protobufs
-This should only be necessary when changes are made to Sliver's protobuf. Running `scripts/protobufgen.py` will update `sliver-py` protobuf files. Ensure that the `.pyi` type hints are generated also.
+
+This should only be necessary when changes are made to Sliver's protobuf definitions. Update the submodule, sync the generator dependencies, then regenerate both the Python modules and `.pyi` type hints:
+
+```console
+git submodule update --init --remote sliver
+uv sync --frozen --group protobuf
+uv run python scripts/protobufgen.py
+```
 
 ### Running tests
-To run tests, you should have at least one beacon implant and one session implant connected to you Sliver instance. Currently, it is ok to only have them running on a Linux system (implants running on your sliver server works fine). In the future, you may need to have a session implant on the type of operating system the test is for, particularly for Windows.
 
-Tests are implemented using [Ward](https://github.com/darrenburns/ward). The tests have been tagged so you can run all the tests or just the tests you need. Recommendation is to run all tests when making a major change.
+The integration tests require a running Sliver server, an operator configuration at `~/.sliver-client/configs/sliverpy.cfg`, and at least one connected beacon and session implant. Run the full pytest suite or select a marker:
 
-- `ward` : All tests
-- `ward --tags client`: Client tests only
-- `ward --tags interactive`: InteractiveObject tests
+- `uv run pytest`: all tests
+- `uv run pytest -m client`: top-level client API tests
+- `uv run pytest -m interactive`: interactive session tests

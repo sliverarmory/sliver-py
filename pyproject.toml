@@ -1,62 +1,87 @@
 [build-system]
-requires = ["hatchling>=1.8.0"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.12.7,<0.13"]
+build-backend = "uv_build"
 
 [project]
 name = "sliver-py"
-description = "Sliver gRPC client library."
+version = "0.1.0"
+description = "Async Python client library for the Sliver gRPC API."
 readme = "README.md"
-license-files = { paths = ["LICENSE"] }
-requires-python = ">=3.7"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
 authors = [
     { name = "moloch", email = "875022+moloch--@users.noreply.github.com" },
-    { name = "daddycocoaman", email = "daddycocoaman@gmail.com"}
+    { name = "daddycocoaman", email = "daddycocoaman@gmail.com" },
 ]
 classifiers = [
-    "Programming Language :: Python :: 3.7",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
+    "Development Status :: 3 - Alpha",
+    "Framework :: AsyncIO",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "grpcio~=1.47",
-    "grpcio-tools~=1.47",
-    "mypy-protobuf~=3.3.0",
-    "typing_extensions~=4.4.0; python_version < '3.8'",
+    "grpcio>=1.81.1,<2",
+    "protobuf>=6.33.5,<7",
+    "pydantic>=2.10,<3",
 ]
-dynamic = ["version"]
 
 [project.urls]
-"Bug Tracker" = "https://github.com/moloch--/sliver-py/issues"
+Documentation = "https://sliverpy.readthedocs.io/"
 Homepage = "https://github.com/moloch--/sliver-py"
+Issues = "https://github.com/moloch--/sliver-py/issues"
+Repository = "https://github.com/moloch--/sliver-py.git"
 
-
-[tool.hatch.envs.dev]
-extra-dependencies = [
-    "rich~=12.5",
-    "black~=22.6", 
-    "isort~=5.10",
-    "ward~=0.66.1b0",
-    "sphinx~=5.1", 
-    "sphinx-rtd-theme~=1.0.0", 
-    "sphinx-autodoc-typehints~=1.19.4",
+[dependency-groups]
+dev = [
+    { include-group = "docs" },
+    { include-group = "lint" },
+    { include-group = "protobuf" },
+    { include-group = "test" },
+]
+docs = [
+    "sphinx>=8,<9",
+    "sphinx-autodoc-typehints>=2.5,<4",
+    "sphinx-rtd-theme>=3.0,<4",
+]
+lint = [
+    "ruff>=0.12,<1",
+]
+protobuf = [
+    "grpcio-tools>=1.81.1,<2",
+    "mypy-protobuf>=3.6,<4",
+]
+release = [
+    "twine>=6.2,<7",
+]
+test = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.1,<2",
 ]
 
-[tool.hatch.envs.dev.scripts]
-fmt = [
-    "isort src", 
-    "black src",
+[tool.pytest.ini_options]
+addopts = "--strict-config --strict-markers"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "client: tests that exercise the top-level Sliver client API",
+    "interactive: tests that exercise an interactive Sliver session",
+    "integration: tests that require a running Sliver server",
 ]
 
-[tool.hatch.version]
-path = "src/sliver/__init__.py"
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+extend-exclude = ["src/sliver/pb"]
 
-[tool.hatch.build]
-packages = ["src/sliver"]
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
 
-[tool.black]
-include = "^/src"
-extend-exclude = "^/src/silver/pb"
-
-[tool.isort]
-profile = "black"
+[tool.uv.build-backend]
+module-name = "sliver"

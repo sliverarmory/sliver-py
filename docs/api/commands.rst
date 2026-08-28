@@ -1,7 +1,9 @@
 Commands
 ========
 
-This module contains the commands that can be used by interactive classes. Users should not need to implement this themselves, as the commands are called by `InteractiveBeacon` and `InteractiveSession`.
+This module contains commands shared by ``InteractiveBeacon`` and
+``InteractiveSession``. Request and response values use the models described in
+:doc:`../models`.
 
 
 BaseInteractiveCommands

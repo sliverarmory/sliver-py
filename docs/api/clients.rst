@@ -1,7 +1,9 @@
 Clients
 =======
 
-This module is used to connect to client gRPC APIs. Users should only need to use the `SliverClient` class. The `BaseClient` class is not intended to be directly but can be inherited by other Client classes.
+This module connects to the Sliver gRPC API. Most users should use
+``SliverClient``; ``BaseClient`` provides shared connection behavior for client
+implementations. Public request and response values are Pydantic models.
 
 
 BaseClient
@@ -18,4 +20,3 @@ SliverClient
     :members:
     :undoc-members:
     :show-inheritance:
-

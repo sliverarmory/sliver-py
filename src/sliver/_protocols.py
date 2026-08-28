@@ -1,30 +1,23 @@
-from .pb.commonpb.common_pb2 import Request
-from .pb.rpcpb.services_pb2_grpc import SliverRPCStub
+from typing import Protocol
 
-try:
-    from typing import Protocol
-except ImportError:
-    from typing_extensions import Protocol
+from ._rpc import PydanticSliverRPCStub
+from .models import ProtobufModel
 
 
-class PbWithRequestProp(Protocol):  # type: ignore
-    """Protocol for protobuf with Request field"""
+class PbWithRequestProp(Protocol):
+    """Protocol for generated Pydantic models with a request field."""
 
     @property
-    def Request(self) -> Request:
-        ...
+    def request(self) -> ProtobufModel | None: ...
 
 
-class InteractiveObject(Protocol):  # type: ignore
-    """Protocol for objects with interactive methods"""
-
-    @property
-    def timeout(self) -> int:
-        ...
+class InteractiveObject(Protocol):
+    """Protocol for objects with interactive methods."""
 
     @property
-    def _stub(self) -> SliverRPCStub:
-        ...
+    def timeout(self) -> int: ...
 
-    def _request(self, pb: PbWithRequestProp) -> PbWithRequestProp:
-        ...
+    @property
+    def _stub(self) -> PydanticSliverRPCStub: ...
+
+    def _request(self, pb: PbWithRequestProp) -> PbWithRequestProp: ...

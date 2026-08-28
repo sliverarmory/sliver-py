@@ -1,18 +1,20 @@
 Beacons
 =======
 
-This module is used to connect to beacon gRPC APIs. Users should only need to use the `InteractiveBeacon` class. The `BaseBeacon` class is not intended to be used directly but can be inherited by other Beacon classes.
+``InteractiveBeacon`` exposes commands for an asynchronous beacon. ``BaseBeacon``
+contains the shared task and event machinery used by beacon implementations.
+Command results resolve to Pydantic models.
 
 
 BaseBeacon
-^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^
 
 .. autoclass:: sliver.beacon.BaseBeacon
     :members:
     :undoc-members:
 
 InteractiveBeacon
-^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^
 
 .. autoclass:: sliver.InteractiveBeacon
     :members:

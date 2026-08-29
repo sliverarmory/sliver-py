@@ -21,6 +21,7 @@ from typing import TypeVar
 import grpc
 
 from . import models
+from ._duration import request_timeout_nanoseconds
 from ._protocols import RequestRoutedModel
 from ._rpc import PydanticSliverRPCStub
 from .errors import raise_for_command_error
@@ -63,7 +64,8 @@ class BaseSession:
         ``model`` is any Pydantic command model with a ``request`` field.
         """
         model.request = models.commonpb.Request(
-            session_id=self._session.id, timeout=self.timeout - 1
+            session_id=self._session.id,
+            timeout=request_timeout_nanoseconds(self.timeout),
         )
         return model
 

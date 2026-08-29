@@ -6,10 +6,10 @@ from . import models
 from .enums import GOOS, LogonType, RegistryHive
 
 class BaseInteractiveCommands:
-    async def ping(self) -> models.sliverpb.Ping:
+    async def ping(self, nonce: int=0) -> models.sliverpb.Ping:
         ...
 
-    async def ps(self) -> models.sliverpb.Ps:
+    async def ps(self, full_info: bool=False) -> models.sliverpb.Ps:
         ...
 
     async def terminate(self, pid: int, force: bool=False) -> models.sliverpb.Terminate:
@@ -30,6 +30,12 @@ class BaseInteractiveCommands:
     async def pwd(self) -> models.sliverpb.Pwd:
         ...
 
+    async def mv(self, source: str, destination: str) -> models.sliverpb.Mv:
+        ...
+
+    async def cp(self, source: str, destination: str) -> models.sliverpb.Cp:
+        ...
+
     async def rm(self, remote_path: str, recursive: bool=False, force: bool=False) -> models.sliverpb.Rm:
         ...
 
@@ -40,6 +46,15 @@ class BaseInteractiveCommands:
         ...
 
     async def upload(self, remote_path: str, data: bytes, is_ioc: bool=False) -> models.sliverpb.Upload:
+        ...
+
+    async def grep(self, search_pattern: str, remote_path: str, *, recursive: bool=False, lines_before: int=0, lines_after: int=0) -> models.sliverpb.Grep:
+        ...
+
+    async def chtimes(self, remote_path: str, accessed_at: int, modified_at: int) -> models.sliverpb.Chtimes:
+        ...
+
+    async def mount(self) -> models.sliverpb.Mount:
         ...
 
     async def procdump(self, pid: int) -> models.sliverpb.ProcessDump:
@@ -84,7 +99,10 @@ class BaseInteractiveCommands:
     async def migrate(self, pid: int, config: models.clientpb.ImplantConfig) -> models.sliverpb.Migrate:
         ...
 
-    async def execute(self, exe: str, args: list[str] | None=None, output: bool=True) -> models.sliverpb.Execute:
+    async def execute(self, exe: str, args: list[str] | None=None, output: bool=True, *, background: bool=False, stdout: str='', stderr: str='', env: dict[str, str] | None=None, env_inheritance: bool=False) -> models.sliverpb.Execute:
+        ...
+
+    async def execute_children(self) -> models.sliverpb.ExecuteChildren:
         ...
 
     async def sideload(self, data: bytes, process_name: str, arguments: list[str], entry_point: str, kill: bool) -> models.sliverpb.Sideload:
@@ -103,6 +121,12 @@ class BaseInteractiveCommands:
         ...
 
     async def call_extension(self, name: str, export: str, ext_args: bytes) -> models.sliverpb.CallExtension:
+        ...
+
+    async def wasm_ls(self) -> models.sliverpb.ListWasmExtensions:
+        ...
+
+    async def wasm_list(self) -> models.sliverpb.ListWasmExtensions:
         ...
 
     async def screenshot(self) -> models.sliverpb.Screenshot:

@@ -7,21 +7,29 @@ from pathlib import Path
 
 import pytest
 
-from sliver import models
+from sliver import C2Protocol, Client, InteractiveSession, models
 
-from .conftest import COMMAND_TIMEOUT, LiveSession, MTLSListener, run_example_cli
+from .conftest import (
+    COMMAND_TIMEOUT,
+    INTERACTION_SCENARIO_TIMEOUT,
+    LiveSession,
+    MTLSListener,
+    run_example_cli,
+)
 from .harness import E2ESettings, SliverServerHarness
+from .interactions import (
+    exercise_captured_execute,
+    exercise_environment_lifecycle,
+    exercise_filesystem_lifecycle,
+    exercise_read_only_inventory,
+    exercise_tracked_child_lifecycle,
+)
 
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.e2e_session,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-
-def _assert_implant_response_succeeded(result: object) -> None:
-    response = getattr(result, "response", None)
-    assert response is None or not response.err
 
 
 async def test_generated_session_registers_as_the_owned_native_process(
@@ -42,52 +50,94 @@ async def test_generated_session_registers_as_the_owned_native_process(
     assert target.pid == live_session.process.pid
     assert target.os == e2e_settings.target_os
     assert target.arch == e2e_settings.target_arch
-    assert target.transport == "mtls"
+    assert target.transport == str(C2Protocol.MTLS)
     if target.active_c2:
         assert target.active_c2 == mtls_listener.c2_url
     assert not target.is_dead
     assert live_session.interactive.session_id == target.id
 
 
-async def test_generated_session_supports_ping_and_pwd(
+async def test_client_resolves_renames_and_uses_the_live_session(
+    live_session: LiveSession,
+    sliver_client: Client,
+) -> None:
+    target = live_session.target
+    assert await sliver_client.find_session(target.id) == target
+    assert await sliver_client.get_session(target.id) == target
+    interaction = await sliver_client.use(target)
+    assert isinstance(interaction, InteractiveSession)
+    assert interaction.session_id == target.id
+
+    updated_name = f"session-e2e-{uuid.uuid4().hex}"
+    await sliver_client.rename_session(target.id, updated_name)
+    try:
+        renamed = await sliver_client.get_session(target.id)
+        assert renamed.name == updated_name
+    finally:
+        await sliver_client.rename_session(target.id, target.name)
+    assert (await sliver_client.get_session(target.id)).name == target.name
+
+
+async def test_generated_session_supports_portable_read_only_commands(
     live_session: LiveSession,
 ) -> None:
-    ping = await asyncio.wait_for(
-        live_session.interactive.ping(),
-        timeout=COMMAND_TIMEOUT,
+    await asyncio.wait_for(
+        exercise_read_only_inventory(
+            live_session.interactive,
+            implant_pid=live_session.process.pid,
+            work_dir=live_session.work_dir,
+        ),
+        timeout=INTERACTION_SCENARIO_TIMEOUT,
     )
-    pwd = await asyncio.wait_for(
-        live_session.interactive.pwd(),
-        timeout=COMMAND_TIMEOUT,
-    )
-
-    assert isinstance(ping, models.sliverpb.Ping)
-    _assert_implant_response_succeeded(ping)
-    assert isinstance(pwd, models.sliverpb.Pwd)
-    _assert_implant_response_succeeded(pwd)
-    assert pwd.path
-    assert Path(pwd.path).is_absolute()
 
 
-async def test_generated_session_executes_the_runner_python(
+async def test_generated_session_manages_files_and_environment(
     live_session: LiveSession,
 ) -> None:
-    python = Path(sys.executable).resolve()
-    marker = f"sliver-py-session-{uuid.uuid4().hex}"
+    await asyncio.wait_for(
+        exercise_filesystem_lifecycle(
+            live_session.interactive,
+            work_dir=live_session.work_dir,
+            label="session",
+        ),
+        timeout=INTERACTION_SCENARIO_TIMEOUT,
+    )
+    await asyncio.wait_for(
+        exercise_environment_lifecycle(
+            live_session.interactive,
+            label="session",
+        ),
+        timeout=INTERACTION_SCENARIO_TIMEOUT,
+    )
 
-    assert python.is_absolute()
-    executed = await asyncio.wait_for(
-        live_session.interactive.execute(
-            str(python),
-            ["-c", f"print({marker!r})"],
+
+async def test_generated_session_executes_and_tracks_owned_processes(
+    live_session: LiveSession,
+) -> None:
+    await asyncio.wait_for(
+        exercise_captured_execute(live_session.interactive, label="session"),
+        timeout=COMMAND_TIMEOUT,
+    )
+    await asyncio.wait_for(
+        exercise_tracked_child_lifecycle(live_session.interactive),
+        timeout=COMMAND_TIMEOUT,
+    )
+
+
+async def test_generated_session_lists_extensions_and_pivots(
+    live_session: LiveSession,
+) -> None:
+    extensions, pivots = await asyncio.wait_for(
+        asyncio.gather(
+            live_session.interactive.extensions_list(),
+            live_session.interactive.pivots(),
         ),
         timeout=COMMAND_TIMEOUT,
     )
 
-    assert isinstance(executed, models.sliverpb.Execute)
-    _assert_implant_response_succeeded(executed)
-    assert executed.status == 0
-    assert marker.encode() in executed.stdout
+    assert isinstance(extensions, models.sliverpb.ListExtensions)
+    assert extensions.names == []
+    assert pivots == []
 
 
 async def test_interaction_example_runs_against_the_live_session(

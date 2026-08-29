@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from sliver import InteractiveSession, models
+from sliver import InteractiveBeacon, InteractiveSession, models
 from sliver._protocols import RequestRoutedModel
 from sliver._rpc import PydanticSliverRPCStub
 from sliver.enums import GOOS, LogonType, RegistryHive
@@ -51,6 +51,7 @@ class _RecordingInteractive(BaseInteractiveCommands):
         ("env", "get_env", ("PATH",)),
         ("env_set", "set_env", ("NAME", "value")),
         ("env_unset", "unset_env", ("NAME",)),
+        ("wasm_ls", "wasm_list", ()),
     ],
 )
 async def test_command_and_compatibility_spellings_produce_the_same_request(
@@ -70,6 +71,130 @@ async def test_command_and_compatibility_spellings_produce_the_same_request(
     assert compatibility_call[0] == primary_call[0]
     assert type(compatibility_call[1]) is type(primary_call[1])
     assert compatibility_call[1].model_dump() == primary_call[1].model_dump()
+
+
+async def test_ping_and_ps_forward_optional_command_values() -> None:
+    interactive = _RecordingInteractive()
+
+    ping = await interactive.ping(8675309)
+    rpc_name, ping_request = interactive.calls.pop()
+    assert rpc_name == "Ping"
+    assert isinstance(ping, models.sliverpb.Ping)
+    assert isinstance(ping_request, models.sliverpb.Ping)
+    assert ping_request.nonce == 8675309
+
+    processes = await interactive.ps(full_info=True)
+    rpc_name, ps_request = interactive.calls.pop()
+    assert rpc_name == "Ps"
+    assert isinstance(processes, models.sliverpb.Ps)
+    assert isinstance(ps_request, models.sliverpb.PsReq)
+    assert ps_request.full_info is True
+
+
+async def test_portable_filesystem_commands_build_complete_requests() -> None:
+    interactive = _RecordingInteractive()
+
+    moved = await interactive.mv("old.txt", "moved.txt")
+    rpc_name, move_request = interactive.calls.pop()
+    assert rpc_name == "Mv"
+    assert isinstance(moved, models.sliverpb.Mv)
+    assert isinstance(move_request, models.sliverpb.MvReq)
+    assert (move_request.src, move_request.dst) == ("old.txt", "moved.txt")
+
+    copied = await interactive.cp("moved.txt", "copy.txt")
+    rpc_name, copy_request = interactive.calls.pop()
+    assert rpc_name == "Cp"
+    assert isinstance(copied, models.sliverpb.Cp)
+    assert isinstance(copy_request, models.sliverpb.CpReq)
+    assert (copy_request.src, copy_request.dst) == ("moved.txt", "copy.txt")
+
+    matches = await interactive.grep(
+        "needle.*",
+        "data",
+        recursive=True,
+        lines_before=2,
+        lines_after=3,
+    )
+    rpc_name, grep_request = interactive.calls.pop()
+    assert rpc_name == "Grep"
+    assert isinstance(matches, models.sliverpb.Grep)
+    assert isinstance(grep_request, models.sliverpb.GrepReq)
+    assert grep_request.search_pattern == "needle.*"
+    assert grep_request.path == "data"
+    assert grep_request.recursive is True
+    assert grep_request.lines_before == 2
+    assert grep_request.lines_after == 3
+
+    changed = await interactive.chtimes("copy.txt", 1_700_000_000, 1_700_000_001)
+    rpc_name, chtimes_request = interactive.calls.pop()
+    assert rpc_name == "Chtimes"
+    assert isinstance(changed, models.sliverpb.Chtimes)
+    assert isinstance(chtimes_request, models.sliverpb.ChtimesReq)
+    assert chtimes_request.path == "copy.txt"
+    assert chtimes_request.a_time == 1_700_000_000
+    assert chtimes_request.m_time == 1_700_000_001
+
+    mounts = await interactive.mount()
+    rpc_name, mount_request = interactive.calls.pop()
+    assert rpc_name == "Mount"
+    assert isinstance(mounts, models.sliverpb.Mount)
+    assert isinstance(mount_request, models.sliverpb.MountReq)
+
+
+async def test_execute_preserves_defaults_and_supports_background_options() -> None:
+    interactive = _RecordingInteractive()
+
+    await interactive.execute("echo", ["hello"])
+    rpc_name, default_request = interactive.calls.pop()
+    assert rpc_name == "Execute"
+    assert isinstance(default_request, models.sliverpb.ExecuteReq)
+    assert default_request.path == "echo"
+    assert default_request.args == ["hello"]
+    assert default_request.output is True
+    assert default_request.background is False
+    assert default_request.stdout == ""
+    assert default_request.stderr == ""
+    assert default_request.env == {}
+    assert default_request.env_inheritance is False
+
+    environment = {"SLIVER_TEST": "present"}
+    executed = await interactive.execute(
+        "worker",
+        output=False,
+        background=True,
+        stdout="worker.stdout",
+        stderr="worker.stderr",
+        env=environment,
+        env_inheritance=True,
+    )
+    environment["SLIVER_TEST"] = "changed"
+    rpc_name, extended_request = interactive.calls.pop()
+    assert rpc_name == "Execute"
+    assert isinstance(executed, models.sliverpb.Execute)
+    assert isinstance(extended_request, models.sliverpb.ExecuteReq)
+    assert extended_request.args == []
+    assert extended_request.output is False
+    assert extended_request.background is True
+    assert extended_request.stdout == "worker.stdout"
+    assert extended_request.stderr == "worker.stderr"
+    assert extended_request.env == {"SLIVER_TEST": "present"}
+    assert extended_request.env_inheritance is True
+
+
+async def test_execute_children_and_wasm_ls_use_command_rpc_names() -> None:
+    interactive = _RecordingInteractive()
+
+    children = await interactive.execute_children()
+    rpc_name, children_request = interactive.calls.pop()
+    assert rpc_name == "ExecuteChildren"
+    assert isinstance(children, models.sliverpb.ExecuteChildren)
+    assert isinstance(children_request, models.sliverpb.ExecuteChildrenReq)
+
+    extensions = await interactive.wasm_ls()
+    rpc_name, wasm_request = interactive.calls.pop()
+    assert rpc_name == "ListWasmExtensions"
+    assert isinstance(extensions, models.sliverpb.ListWasmExtensions)
+    assert isinstance(wasm_request, models.sliverpb.ListWasmExtensionsReq)
 
 
 async def test_runas_matches_sliver_options_and_preserves_run_as_defaults() -> None:
@@ -189,7 +314,9 @@ async def test_string_enums_are_normalized_in_interactive_requests() -> None:
         await interactive.registry_create("Sliver")
 
 
-async def test_session_only_command_names_delegate_to_retained_implementations() -> None:
+async def test_session_only_command_names_delegate_to_retained_implementations() -> (
+    None
+):
     session = InteractiveSession.__new__(InteractiveSession)
     get_system = AsyncMock(return_value=models.sliverpb.GetSystem())
     list_extensions = AsyncMock(return_value=models.sliverpb.ListExtensions())
@@ -234,6 +361,24 @@ async def test_pivots_is_primary_and_pivot_listeners_remains_compatible() -> Non
         request.request is not None and request.request.session_id == "session-id"
         for request in stub.requests
     )
+    assert all(
+        request.request is not None and request.request.timeout == 16_999_999_999
+        for request in stub.requests
+    )
+
+
+def test_beacon_routing_uses_go_duration_and_async_tasking() -> None:
+    beacon = InteractiveBeacon.__new__(InteractiveBeacon)
+    beacon._beacon = models.clientpb.Beacon(id="beacon-id")
+    beacon.timeout = 17
+
+    request = beacon._request(models.sliverpb.Ping())
+
+    assert request.request == models.commonpb.Request(
+        beacon_id="beacon-id",
+        timeout=16_999_999_999,
+        async_=True,
+    )
 
 
 async def test_services_command_paths_use_current_sliver_requests() -> None:
@@ -254,7 +399,7 @@ async def test_services_command_paths_use_current_sliver_requests() -> None:
     )
     assert start_request.request == models.commonpb.Request(
         session_id="session-id",
-        timeout=16,
+        timeout=16_999_999_999,
     )
 
     await session.services_stop("Spooler", hostname="server.example")

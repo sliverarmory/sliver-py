@@ -118,15 +118,19 @@ CLIENT_FEATURES = {
 INTERACTIVE_FEATURES = {
     "call_extension",
     "cd",
+    "chtimes",
+    "cp",
     "download",
     "env",
     "env_set",
     "env_unset",
     "execute",
     "execute_assembly",
+    "execute_children",
     "execute_shellcode",
     "get_env",
     "get_system",
+    "grep",
     "ifconfig",
     "impersonate",
     "list_extensions",
@@ -137,6 +141,8 @@ INTERACTIVE_FEATURES = {
     "msf",
     "msf_inject",
     "msf_remote",
+    "mount",
+    "mv",
     "netstat",
     "ping",
     "procdump",
@@ -161,6 +167,8 @@ INTERACTIVE_FEATURES = {
     "terminate",
     "unset_env",
     "upload",
+    "wasm_list",
+    "wasm_ls",
 }
 
 SESSION_ONLY_FEATURES = {
@@ -238,9 +246,7 @@ def _assert_no_protobuf_value(value: object) -> None:
         for key, item in value.items():
             _assert_no_protobuf_value(key)
             _assert_no_protobuf_value(item)
-    elif isinstance(value, Sequence) and not isinstance(
-        value, (str, bytes, bytearray)
-    ):
+    elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for item in value:
             _assert_no_protobuf_value(item)
 
@@ -275,8 +281,7 @@ def test_model_module_only_publishes_pydantic_models_and_python_enums() -> None:
         for model_type in models.MODEL_REGISTRY.values()
     )
     assert all(
-        issubclass(enum_type, IntEnum)
-        for enum_type in models.ENUM_REGISTRY.values()
+        issubclass(enum_type, IntEnum) for enum_type in models.ENUM_REGISTRY.values()
     )
 
 

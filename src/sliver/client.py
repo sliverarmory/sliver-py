@@ -26,6 +26,7 @@ from datetime import timedelta
 import grpc
 
 from . import models
+from ._duration import duration_nanoseconds, request_timeout_nanoseconds
 from ._rpc import PydanticSliverRPCStub
 from .beacon import InteractiveBeacon, _ClientEventBroker
 from .config import OperatorConfig, SliverClientConfig
@@ -43,10 +44,6 @@ KB = 1024
 MB = 1024 * KB
 GB = 1024 * MB
 TIMEOUT = 60
-_NANOSECONDS_PER_MICROSECOND = 1_000
-_MICROSECONDS_PER_SECOND = 1_000_000
-_SECONDS_PER_DAY = 86_400
-_MAX_INT64 = 9_223_372_036_854_775_807
 
 
 def _normalize_event_types(
@@ -60,25 +57,9 @@ def _normalize_event_types(
 
 
 def _duration_nanoseconds(value: timedelta | int, *, name: str) -> int:
-    """Convert an ergonomic duration into Sliver's signed nanosecond value."""
+    """Compatibility wrapper for the shared Sliver-duration converter."""
 
-    if isinstance(value, bool):
-        raise TypeError(f"{name} must be a timedelta or whole seconds")
-    if isinstance(value, int):
-        value = timedelta(seconds=value)
-    if not isinstance(value, timedelta):
-        raise TypeError(f"{name} must be a timedelta or whole seconds")
-    microseconds = (
-        value.days * _SECONDS_PER_DAY * _MICROSECONDS_PER_SECOND
-        + value.seconds * _MICROSECONDS_PER_SECOND
-        + value.microseconds
-    )
-    nanoseconds = microseconds * _NANOSECONDS_PER_MICROSECOND
-    if nanoseconds < 0:
-        raise ValueError(f"{name} cannot be negative")
-    if nanoseconds > _MAX_INT64:
-        raise ValueError(f"{name} exceeds Sliver's signed 64-bit duration")
-    return nanoseconds
+    return duration_nanoseconds(value, name=name)
 
 
 class BaseClient:
@@ -532,7 +513,10 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        request = models.commonpb.Request(session_id=session_id, timeout=timeout)
+        request = models.commonpb.Request(
+            session_id=session_id,
+            timeout=request_timeout_nanoseconds(timeout),
+        )
         kill_req = models.sliverpb.KillReq(force=force, request=request)
         await self.pydantic_stub.Kill(kill_req, timeout=timeout)
 
@@ -579,7 +563,10 @@ class SliverClient(BaseClient):
         :param timeout: gRPC timeout, defaults to 60 seconds
         :type timeout: int, optional
         """
-        request = models.commonpb.Request(beacon_id=beacon_id, timeout=timeout)
+        request = models.commonpb.Request(
+            beacon_id=beacon_id,
+            timeout=request_timeout_nanoseconds(timeout),
+        )
         kill_req = models.sliverpb.KillReq(force=force, request=request)
         await self.pydantic_stub.Kill(kill_req, timeout=timeout)
 

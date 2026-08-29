@@ -22,23 +22,31 @@ from .enums import GOOS, LogonType, RegistryHive
 
 
 class BaseInteractiveCommands:
-    async def ping(self: InteractiveObject) -> models.sliverpb.Ping:
+    async def ping(self: InteractiveObject, nonce: int = 0) -> models.sliverpb.Ping:
         """Send a round trip message to the implant (does NOT use ICMP)
 
+        :param nonce: Optional value echoed by the implant, defaults to 0
+        :type nonce: int, optional
         :return: Pydantic ping model
         :rtype: models.sliverpb.Ping
         """
         return await self._execute(
-            "Ping", self._request(models.sliverpb.Ping()), models.sliverpb.Ping
+            "Ping",
+            self._request(models.sliverpb.Ping(nonce=nonce)),
+            models.sliverpb.Ping,
         )
 
-    async def ps(self: InteractiveObject) -> models.sliverpb.Ps:
+    async def ps(
+        self: InteractiveObject, full_info: bool = False
+    ) -> models.sliverpb.Ps:
         """List the processes of the remote system
 
+        :param full_info: Include full process metadata, defaults to False
+        :type full_info: bool, optional
         :return: Pydantic process-list model
         :rtype: models.sliverpb.Ps
         """
-        ps = models.sliverpb.PsReq()
+        ps = models.sliverpb.PsReq(full_info=full_info)
         return await self._execute("Ps", self._request(ps), models.sliverpb.Ps)
 
     async def terminate(
@@ -131,6 +139,36 @@ class BaseInteractiveCommands:
         pwd = models.sliverpb.PwdReq()
         return await self._execute("Pwd", self._request(pwd), models.sliverpb.Pwd)
 
+    async def mv(
+        self: InteractiveObject, source: str, destination: str
+    ) -> models.sliverpb.Mv:
+        """Move or rename a remote file.
+
+        :param source: Existing remote path
+        :type source: str
+        :param destination: New remote path
+        :type destination: str
+        :return: Pydantic move-result model
+        :rtype: models.sliverpb.Mv
+        """
+        move = models.sliverpb.MvReq(src=source, dst=destination)
+        return await self._execute("Mv", self._request(move), models.sliverpb.Mv)
+
+    async def cp(
+        self: InteractiveObject, source: str, destination: str
+    ) -> models.sliverpb.Cp:
+        """Copy a remote file.
+
+        :param source: Existing remote path
+        :type source: str
+        :param destination: New remote path
+        :type destination: str
+        :return: Pydantic copy-result model
+        :rtype: models.sliverpb.Cp
+        """
+        copy = models.sliverpb.CpReq(src=source, dst=destination)
+        return await self._execute("Cp", self._request(copy), models.sliverpb.Cp)
+
     async def rm(
         self: InteractiveObject,
         remote_path: str,
@@ -160,9 +198,7 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.Mkdir
         """
         make = models.sliverpb.MkdirReq(path=remote_path)
-        return await self._execute(
-            "Mkdir", self._request(make), models.sliverpb.Mkdir
-        )
+        return await self._execute("Mkdir", self._request(make), models.sliverpb.Mkdir)
 
     async def download(
         self: InteractiveObject, remote_path: str, recurse: bool = False
@@ -201,6 +237,77 @@ class BaseInteractiveCommands:
         upload = models.sliverpb.UploadReq(path=remote_path, data=data, is_ioc=is_ioc)
         return await self._execute(
             "Upload", self._request(upload), models.sliverpb.Upload
+        )
+
+    async def grep(
+        self: InteractiveObject,
+        search_pattern: str,
+        remote_path: str,
+        *,
+        recursive: bool = False,
+        lines_before: int = 0,
+        lines_after: int = 0,
+    ) -> models.sliverpb.Grep:
+        """Search remote files for a regular expression.
+
+        :param search_pattern: Go-compatible regular expression to search for
+        :type search_pattern: str
+        :param remote_path: Remote file or directory to search
+        :type remote_path: str
+        :param recursive: Search directories recursively, defaults to False
+        :type recursive: bool, optional
+        :param lines_before: Context lines before each match, defaults to 0
+        :type lines_before: int, optional
+        :param lines_after: Context lines after each match, defaults to 0
+        :type lines_after: int, optional
+        :return: Pydantic search-result model
+        :rtype: models.sliverpb.Grep
+        """
+        grep = models.sliverpb.GrepReq(
+            search_pattern=search_pattern,
+            path=remote_path,
+            recursive=recursive,
+            lines_before=lines_before,
+            lines_after=lines_after,
+        )
+        return await self._execute("Grep", self._request(grep), models.sliverpb.Grep)
+
+    async def chtimes(
+        self: InteractiveObject,
+        remote_path: str,
+        accessed_at: int,
+        modified_at: int,
+    ) -> models.sliverpb.Chtimes:
+        """Change a remote file's access and modification times.
+
+        :param remote_path: Remote file or directory
+        :type remote_path: str
+        :param accessed_at: Last-access time as Unix seconds
+        :type accessed_at: int
+        :param modified_at: Last-modified time as Unix seconds
+        :type modified_at: int
+        :return: Pydantic timestamp-update model
+        :rtype: models.sliverpb.Chtimes
+        """
+        times = models.sliverpb.ChtimesReq(
+            path=remote_path,
+            a_time=accessed_at,
+            m_time=modified_at,
+        )
+        return await self._execute(
+            "Chtimes", self._request(times), models.sliverpb.Chtimes
+        )
+
+    async def mount(self: InteractiveObject) -> models.sliverpb.Mount:
+        """Get information about mounted remote filesystems.
+
+        :return: Pydantic mounted-filesystem inventory
+        :rtype: models.sliverpb.Mount
+        """
+        return await self._execute(
+            "Mount",
+            self._request(models.sliverpb.MountReq()),
+            models.sliverpb.Mount,
         )
 
     async def procdump(
@@ -527,6 +634,12 @@ class BaseInteractiveCommands:
         exe: str,
         args: list[str] | None = None,
         output: bool = True,
+        *,
+        background: bool = False,
+        stdout: str = "",
+        stderr: str = "",
+        env: dict[str, str] | None = None,
+        env_inheritance: bool = False,
     ) -> models.sliverpb.Execute:
         """Execute a command/subprocess on the remote system
 
@@ -536,14 +649,45 @@ class BaseInteractiveCommands:
         :type args: List[str]
         :param output: Enable capturing command/subprocess stdout
         :type output: bool
+        :param background: Track the process in the background, defaults to False
+        :type background: bool, optional
+        :param stdout: Remote path to redirect stdout to, defaults to ""
+        :type stdout: str, optional
+        :param stderr: Remote path to redirect stderr to, defaults to ""
+        :type stderr: str, optional
+        :param env: Environment variables for the child process
+        :type env: dict[str, str] | None, optional
+        :param env_inheritance: Inherit the implant's environment, defaults to False
+        :type env_inheritance: bool, optional
         :return: Pydantic execution-result model
         :rtype: models.sliverpb.Execute
         """
-        if not args:
-            args = []
-        execute_req = models.sliverpb.ExecuteReq(path=exe, args=args, output=output)
+        execute_req = models.sliverpb.ExecuteReq(
+            path=exe,
+            args=args or [],
+            output=output,
+            background=background,
+            stdout=stdout,
+            stderr=stderr,
+            env=dict(env or {}),
+            env_inheritance=env_inheritance,
+        )
         return await self._execute(
             "Execute", self._request(execute_req), models.sliverpb.Execute
+        )
+
+    async def execute_children(
+        self: InteractiveObject,
+    ) -> models.sliverpb.ExecuteChildren:
+        """List processes tracked by background ``execute`` commands.
+
+        :return: Pydantic tracked-child inventory
+        :rtype: models.sliverpb.ExecuteChildren
+        """
+        return await self._execute(
+            "ExecuteChildren",
+            self._request(models.sliverpb.ExecuteChildrenReq()),
+            models.sliverpb.ExecuteChildren,
         )
 
     async def sideload(
@@ -715,6 +859,27 @@ class BaseInteractiveCommands:
             self._request(callex),
             models.sliverpb.CallExtension,
         )
+
+    async def wasm_ls(
+        self: InteractiveObject,
+    ) -> models.sliverpb.ListWasmExtensions:
+        """List registered Wasm extensions, matching Sliver's ``wasm ls`` command.
+
+        :return: Pydantic Wasm-extension inventory
+        :rtype: models.sliverpb.ListWasmExtensions
+        """
+        return await self._execute(
+            "ListWasmExtensions",
+            self._request(models.sliverpb.ListWasmExtensionsReq()),
+            models.sliverpb.ListWasmExtensions,
+        )
+
+    async def wasm_list(
+        self: BaseInteractiveCommands,
+    ) -> models.sliverpb.ListWasmExtensions:
+        """Compatibility alias for :meth:`wasm_ls`."""
+
+        return await self.wasm_ls()
 
     async def screenshot(self: InteractiveObject) -> models.sliverpb.Screenshot:
         """Take a screenshot of the remote system, screenshot data is PNG formatted

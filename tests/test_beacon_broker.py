@@ -9,7 +9,7 @@ import grpc
 import pytest
 
 import sliver.beacon as beacon_module
-from sliver import SliverClient, SliverClientConfig, models
+from sliver import BeaconTaskState, SliverClient, SliverClientConfig, models
 from sliver._rpc import PydanticSliverRPCStub
 from sliver.beacon import BaseBeacon, _ClientEventBroker
 from sliver.errors import CommandError, SliverTimeoutError
@@ -66,6 +66,7 @@ class _FakeBeaconStub:
         self.events_calls = 0
         self.contents: dict[str, models.clientpb.BeaconTask] = {}
         self.content_errors: dict[str, Exception] = {}
+        self.content_calls: list[tuple[str, float | None]] = []
         self.cancelled: list[tuple[str, float | None]] = []
 
     def Events(self, request: models.commonpb.Empty) -> _EventStream:
@@ -78,6 +79,7 @@ class _FakeBeaconStub:
         request: models.clientpb.BeaconTask,
         timeout: float | None = None,
     ) -> models.clientpb.BeaconTask:
+        self.content_calls.append((request.id, timeout))
         error = self.content_errors.get(request.id)
         if error is not None:
             raise error
@@ -146,6 +148,92 @@ async def test_broker_recovers_an_event_that_arrives_before_registration() -> No
     assert result == expected
     assert broker._pending == {}
     assert task_id not in broker._orphaned_results
+    await broker.close()
+
+
+async def test_beacon_execute_polls_completed_task_when_result_event_is_lost() -> None:
+    fake = _FakeBeaconStub()
+    broker = _broker(fake)
+    broker._TASK_POLL_INTERVAL = 0
+    task_id = "lost-result-event"
+    expected = models.sliverpb.Ping(nonce=7331)
+    fake.contents[task_id] = models.clientpb.BeaconTask(
+        id=task_id,
+        state=BeaconTaskState.COMPLETED.value,
+        response=_serialize(expected),
+    )
+    fake.Ping = AsyncMock(
+        return_value=models.sliverpb.Ping(
+            response=models.commonpb.Response(task_id=task_id)
+        )
+    )
+    beacon = BaseBeacon.__new__(BaseBeacon)
+    beacon._closed = False
+    beacon._event_broker = broker
+    beacon._stub = fake
+    beacon._beacon = models.clientpb.Beacon(id="beacon-id")
+    beacon.timeout = 1
+
+    try:
+        result = await beacon._execute(
+            "Ping", models.sliverpb.Ping(), models.sliverpb.Ping
+        )
+    finally:
+        await broker.close()
+
+    assert result == expected
+    fake.Ping.assert_awaited_once_with(models.sliverpb.Ping(), timeout=1)
+    assert len(fake.content_calls) == 1
+    polled_task_id, poll_timeout = fake.content_calls[0]
+    assert polled_task_id == task_id
+    assert poll_timeout is not None
+    assert 0 < poll_timeout <= beacon.timeout
+
+
+async def test_broker_polling_waits_for_a_completed_task_state() -> None:
+    fake = _FakeBeaconStub()
+    broker = _broker(fake)
+    broker._TASK_POLL_INTERVAL = 0
+    task_id = "eventually-completed"
+    expected = models.sliverpb.Ping(nonce=31337)
+    fake.contents[task_id] = models.clientpb.BeaconTask(
+        id=task_id,
+        state=BeaconTaskState.SENT.value,
+    )
+    waiter = asyncio.create_task(
+        broker.wait_for_result(task_id, models.sliverpb.Ping, timeout=1)
+    )
+
+    await _wait_until(lambda: bool(fake.content_calls))
+    assert not waiter.done()
+    fake.contents[task_id] = models.clientpb.BeaconTask(
+        id=task_id,
+        state=BeaconTaskState.COMPLETED.value,
+        response=_serialize(expected),
+    )
+
+    assert await waiter == expected
+    assert len(fake.content_calls) >= 2
+    assert broker._pending == {}
+    assert broker._pollers == {}
+    await broker.close()
+
+
+async def test_broker_polling_fails_a_terminal_non_completed_task() -> None:
+    fake = _FakeBeaconStub()
+    broker = _broker(fake)
+    broker._TASK_POLL_INTERVAL = 0
+    task_id = "canceled-task"
+    fake.contents[task_id] = models.clientpb.BeaconTask(
+        id=task_id,
+        state=BeaconTaskState.CANCELED.value,
+    )
+
+    with pytest.raises(RuntimeError, match="ended in state 'canceled'"):
+        await broker.wait_for_result(task_id, models.sliverpb.Ping, timeout=1)
+
+    assert broker._pending == {}
+    assert broker._pollers == {}
     await broker.close()
 
 
@@ -267,10 +355,17 @@ async def test_broker_close_cleans_and_cancels_pending_remote_tasks() -> None:
     assert fake.cancelled == [("client-closing", 1)]
 
 
-async def test_broker_cleans_a_failed_result_fetch() -> None:
+async def test_broker_recovers_when_the_event_result_fetch_is_transient() -> None:
     fake = _FakeBeaconStub()
     broker = _broker(fake)
+    broker._TASK_POLL_INTERVAL = 0.01
     task_id = "failed-result"
+    expected = models.sliverpb.Ping(nonce=91210)
+    fake.contents[task_id] = models.clientpb.BeaconTask(
+        id=task_id,
+        state=BeaconTaskState.COMPLETED.value,
+        response=_serialize(expected),
+    )
     fake.content_errors[task_id] = RuntimeError("content unavailable")
     waiter = asyncio.create_task(
         broker.wait_for_result(task_id, models.sliverpb.Ping, timeout=1)
@@ -278,11 +373,14 @@ async def test_broker_cleans_a_failed_result_fetch() -> None:
     await _wait_until(lambda: task_id in broker._pending)
 
     await fake.stream.emit(task_id)
-    with pytest.raises(RuntimeError, match="content unavailable"):
-        await waiter
+    await _wait_until(lambda: bool(fake.content_calls))
+    fake.content_errors.pop(task_id)
 
+    assert await waiter == expected
+    assert len(fake.content_calls) >= 2
     assert broker._pending == {}
     assert broker._resolvers == {}
+    assert broker._pollers == {}
     await broker.close()
 
 

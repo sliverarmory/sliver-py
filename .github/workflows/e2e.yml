@@ -68,7 +68,7 @@ jobs:
     name: ${{ matrix.name }}
     needs: quality
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 360
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       max-parallel: 3
@@ -152,14 +152,14 @@ jobs:
 
       - name: Generate host-native Sliver assets
         working-directory: sliver
-        timeout-minutes: 90
+        timeout-minutes: 20
         run: >-
           go run -buildvcs=false -mod=vendor ./util/cmd/assets
           2>&1 | tee "../.e2e-results/${{ matrix.id }}/assets.log"
 
       - name: Build host-native Sliver server
         working-directory: sliver
-        timeout-minutes: 45
+        timeout-minutes: 10
         env:
           CGO_ENABLED: "0"
           GOARCH: ${{ matrix.goarch }}
@@ -170,12 +170,10 @@ jobs:
           2>&1 | tee "../.e2e-results/${{ matrix.id }}/server-build.log"
 
       - name: Run Sliver E2E suite
-        timeout-minutes: 240
+        timeout-minutes: 45
         run: >-
           uv run --frozen --group test pytest -vv -ra
-          tests/e2e/test_basic.py
-          tests/e2e/test_session.py
-          tests/e2e/test_beacon.py
+          tests/e2e
           --junitxml="$SLIVER_E2E_RESULTS_ROOT/junit.xml"
           --log-file="$SLIVER_E2E_RESULTS_ROOT/pytest.log"
           --log-file-level=DEBUG

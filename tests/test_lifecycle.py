@@ -65,10 +65,26 @@ async def test_kill_beacon_routes_kill_to_the_beacon() -> None:
     assert isinstance(request, models.sliverpb.KillReq)
     assert request.force
     assert request.request == models.commonpb.Request(
-        beacon_id="beacon-id", timeout=17
+        beacon_id="beacon-id", timeout=16_999_999_999
     )
     converted_stub.Kill.assert_awaited_once_with(request, timeout=17)
     converted_stub.RmBeacon.assert_not_awaited()
+
+
+async def test_kill_session_encodes_the_server_deadline_as_a_go_duration() -> None:
+    client = SliverClient(_config())
+    converted_stub = AsyncMock()
+    client._stub = converted_stub
+
+    await client.kill_session("session-id", force=True, timeout=17)
+
+    request = converted_stub.Kill.await_args.args[0]
+    assert isinstance(request, models.sliverpb.KillReq)
+    assert request.request == models.commonpb.Request(
+        session_id="session-id",
+        timeout=16_999_999_999,
+    )
+    converted_stub.Kill.assert_awaited_once_with(request, timeout=17)
 
 
 async def test_rm_beacon_removes_only_the_server_record() -> None:

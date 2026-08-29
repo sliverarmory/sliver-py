@@ -7,21 +7,30 @@ from pathlib import Path
 
 import pytest
 
-from sliver import models
+from sliver import BeaconTaskState, C2Protocol, Client, InteractiveBeacon, models
 
-from .conftest import COMMAND_TIMEOUT, LiveBeacon, MTLSListener, run_example_cli
+from .conftest import (
+    COMMAND_TIMEOUT,
+    INTERACTION_SCENARIO_TIMEOUT,
+    LiveBeacon,
+    MTLSListener,
+    run_example_cli,
+)
 from .harness import E2ESettings, SliverServerHarness
+from .interactions import (
+    assert_implant_response_succeeded,
+    exercise_captured_execute,
+    exercise_environment_lifecycle,
+    exercise_filesystem_lifecycle,
+    exercise_read_only_inventory,
+    exercise_tracked_child_lifecycle,
+)
 
 pytestmark = [
     pytest.mark.e2e,
     pytest.mark.e2e_beacon,
     pytest.mark.asyncio(loop_scope="session"),
 ]
-
-
-def _assert_implant_response_succeeded(result: object) -> None:
-    response = getattr(result, "response", None)
-    assert response is None or not response.err
 
 
 async def test_generated_beacon_registers_as_the_owned_native_process(
@@ -42,52 +51,112 @@ async def test_generated_beacon_registers_as_the_owned_native_process(
     assert target.pid == live_beacon.process.pid
     assert target.os == e2e_settings.target_os
     assert target.arch == e2e_settings.target_arch
-    assert target.transport == "mtls"
+    assert target.transport == str(C2Protocol.MTLS)
     if target.active_c2:
         assert target.active_c2 == mtls_listener.c2_url
     assert not target.is_dead
     assert live_beacon.interactive.beacon_id == target.id
 
 
-async def test_generated_beacon_supports_ping_and_pwd(
+async def test_client_resolves_renames_and_uses_the_live_beacon(
+    live_beacon: LiveBeacon,
+    sliver_client: Client,
+) -> None:
+    target = live_beacon.target
+    assert await sliver_client.find_beacon(target.id) == target
+    assert await sliver_client.get_beacon(target.id) == target
+    interaction = await sliver_client.use(target)
+    assert isinstance(interaction, InteractiveBeacon)
+    assert interaction.beacon_id == target.id
+
+    updated_name = f"beacon-e2e-{uuid.uuid4().hex}"
+    await sliver_client.rename_beacon(target.id, updated_name)
+    try:
+        renamed = await sliver_client.get_beacon(target.id)
+        assert renamed.name == updated_name
+    finally:
+        await sliver_client.rename_beacon(target.id, target.name)
+    assert (await sliver_client.get_beacon(target.id)).name == target.name
+
+
+async def test_generated_beacon_supports_portable_read_only_commands(
     live_beacon: LiveBeacon,
 ) -> None:
-    ping = await asyncio.wait_for(
-        live_beacon.interactive.ping(),
-        timeout=COMMAND_TIMEOUT,
-    )
-    pwd = await asyncio.wait_for(
-        live_beacon.interactive.pwd(),
-        timeout=COMMAND_TIMEOUT,
-    )
-
-    assert isinstance(ping, models.sliverpb.Ping)
-    _assert_implant_response_succeeded(ping)
-    assert isinstance(pwd, models.sliverpb.Pwd)
-    _assert_implant_response_succeeded(pwd)
-    assert pwd.path
-    assert Path(pwd.path).is_absolute()
-
-
-async def test_generated_beacon_executes_the_runner_python(
-    live_beacon: LiveBeacon,
-) -> None:
-    python = Path(sys.executable).resolve()
-    marker = f"sliver-py-beacon-{uuid.uuid4().hex}"
-
-    assert python.is_absolute()
-    executed = await asyncio.wait_for(
-        live_beacon.interactive.execute(
-            str(python),
-            ["-c", f"print({marker!r})"],
+    await asyncio.wait_for(
+        exercise_read_only_inventory(
+            live_beacon.interactive,
+            implant_pid=live_beacon.process.pid,
+            work_dir=live_beacon.work_dir,
         ),
+        timeout=INTERACTION_SCENARIO_TIMEOUT,
+    )
+
+
+async def test_generated_beacon_manages_files_and_environment(
+    live_beacon: LiveBeacon,
+) -> None:
+    await asyncio.wait_for(
+        exercise_filesystem_lifecycle(
+            live_beacon.interactive,
+            work_dir=live_beacon.work_dir,
+            label="beacon",
+        ),
+        timeout=INTERACTION_SCENARIO_TIMEOUT,
+    )
+    await asyncio.wait_for(
+        exercise_environment_lifecycle(
+            live_beacon.interactive,
+            label="beacon",
+        ),
+        timeout=INTERACTION_SCENARIO_TIMEOUT,
+    )
+
+
+async def test_generated_beacon_executes_with_output_and_environment(
+    live_beacon: LiveBeacon,
+) -> None:
+    await asyncio.wait_for(
+        exercise_captured_execute(live_beacon.interactive, label="beacon"),
+        timeout=COMMAND_TIMEOUT,
+    )
+    await asyncio.wait_for(
+        exercise_tracked_child_lifecycle(live_beacon.interactive),
         timeout=COMMAND_TIMEOUT,
     )
 
-    assert isinstance(executed, models.sliverpb.Execute)
-    _assert_implant_response_succeeded(executed)
-    assert executed.status == 0
-    assert marker.encode() in executed.stdout
+
+async def test_beacon_command_is_correlated_with_completed_task_content(
+    live_beacon: LiveBeacon,
+    sliver_client: Client,
+) -> None:
+    before = {
+        task.id
+        for task in await sliver_client.tasks(live_beacon.target.id)
+    }
+    nonce = 0x51A7E2E
+
+    ping = await live_beacon.interactive.ping(nonce)
+    assert_implant_response_succeeded(ping)
+    assert ping.nonce == nonce
+
+    delta = [
+        task
+        for task in await sliver_client.tasks(live_beacon.target.id)
+        if task.id not in before
+    ]
+    assert len(delta) == 1
+    task = delta[0]
+    assert task.beacon_id == live_beacon.target.id
+    assert task.state == str(BeaconTaskState.COMPLETED)
+    assert task.completed_at > 0
+
+    fetched = await sliver_client.tasks_fetch(task.id)
+    assert fetched.id == task.id
+    assert fetched.beacon_id == live_beacon.target.id
+    assert fetched.state == str(BeaconTaskState.COMPLETED)
+    assert fetched.completed_at == task.completed_at
+    assert fetched.request
+    assert fetched.response
 
 
 async def test_interaction_example_runs_against_the_live_beacon(

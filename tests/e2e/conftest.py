@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 import sys
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,9 +13,10 @@ import pytest
 import pytest_asyncio
 
 from sliver import (
+    C2Protocol,
+    Client,
     InteractiveBeacon,
     InteractiveSession,
-    SliverClient,
     models,
 )
 
@@ -22,12 +24,13 @@ from .harness import (
     E2ESettings,
     ManagedProcess,
     SliverServerHarness,
-    free_loopback_port,
+    retry_bind_conflicts,
 )
 
 GENERATE_TIMEOUT = 15 * 60
 REGISTRATION_TIMEOUT = 3 * 60
 COMMAND_TIMEOUT = 2 * 60
+INTERACTION_SCENARIO_TIMEOUT = 5 * 60
 POLL_INTERVAL = 0.25
 
 
@@ -40,13 +43,14 @@ class MTLSListener:
 
     @property
     def c2_url(self) -> str:
-        return f"mtls://127.0.0.1:{self.port}"
+        return f"{C2Protocol.MTLS}://127.0.0.1:{self.port}"
 
 
 @dataclass(frozen=True, slots=True)
 class LiveSession:
     generated: models.clientpb.Generate
     executable: Path
+    work_dir: Path
     process: ManagedProcess
     target: models.clientpb.Session
     interactive: InteractiveSession
@@ -56,6 +60,7 @@ class LiveSession:
 class LiveBeacon:
     generated: models.clientpb.Generate
     executable: Path
+    work_dir: Path
     process: ManagedProcess
     target: models.clientpb.Beacon
     interactive: InteractiveBeacon
@@ -93,17 +98,59 @@ async def _wait_for_loopback_listener(port: int, timeout: float = 10.0) -> None:
 
 
 async def _wait_for_job_removal(
-    client: SliverClient,
+    client: Client,
     job_id: int,
     timeout: float = 10.0,
 ) -> None:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
     while loop.time() < deadline:
-        if await client.job_by_id(job_id, timeout=COMMAND_TIMEOUT) is None:
+        remaining = deadline - loop.time()
+        rpc_timeout = max(1, min(COMMAND_TIMEOUT, math.ceil(remaining)))
+        if await asyncio.wait_for(
+            client.job_by_id(job_id, timeout=rpc_timeout),
+            timeout=remaining,
+        ) is None:
             return
         await asyncio.sleep(POLL_INTERVAL)
     raise TimeoutError(f"listener job {job_id} was not removed")
+
+
+async def _stop_listener_job(client: Client, job_id: int) -> None:
+    stopped = await asyncio.wait_for(
+        client.kill_job(job_id, timeout=COMMAND_TIMEOUT),
+        timeout=COMMAND_TIMEOUT,
+    )
+    if stopped.id != job_id or not stopped.success:
+        raise RuntimeError(f"Sliver did not stop listener job {job_id}")
+    await _wait_for_job_removal(client, job_id)
+
+
+async def _start_loopback_listener_with_retry(
+    client: Client,
+    start: Callable[[int], Awaitable[models.clientpb.ListenerJob]],
+) -> tuple[int, models.clientpb.ListenerJob]:
+    """Start one ready listener, retrying only explicit port bind conflicts."""
+
+    async def start_once(port: int) -> tuple[int, models.clientpb.ListenerJob]:
+        listener: models.clientpb.ListenerJob | None = None
+        try:
+            listener = await start(port)
+            if listener.job_id <= 0:
+                raise RuntimeError("Sliver did not return a listener job ID")
+            await _wait_for_loopback_listener(port)
+            return port, listener
+        except BaseException:
+            if listener is not None and listener.job_id > 0:
+                try:
+                    await _stop_listener_job(client, listener.job_id)
+                except Exception:
+                    raise RuntimeError(
+                        "failed to clean up a partial listener start"
+                    ) from None
+            raise
+
+    return await retry_bind_conflicts(start_once)
 
 
 def example_command(
@@ -142,11 +189,19 @@ async def run_example_cli(
     )
     try:
         stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
-    except asyncio.TimeoutError as error:
+    except BaseException as error:
         if process.returncode is None:
             with suppress(ProcessLookupError):
                 process.kill()
-        _stdout, stderr = await process.communicate()
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                process.communicate(),
+                timeout=10,
+            )
+        except asyncio.TimeoutError:
+            stderr = b"example process did not exit after forced termination"
+        if not isinstance(error, asyncio.TimeoutError):
+            raise
         diagnostic = stderr.decode(errors="replace")[-8192:]
         raise TimeoutError(
             f"example {module!r} did not exit within {timeout} seconds: {diagnostic}"
@@ -229,11 +284,13 @@ def e2e_settings() -> E2ESettings:
     return E2ESettings.from_env()
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def e2e_harness(
     e2e_settings: E2ESettings,
+    request: pytest.FixtureRequest,
 ) -> AsyncIterator[SliverServerHarness]:
-    harness = SliverServerHarness(e2e_settings)
+    scenario = Path(str(request.node.path)).stem.removeprefix("test_")
+    harness = SliverServerHarness(e2e_settings, scenario=scenario)
     await harness.start()
     try:
         yield harness
@@ -241,46 +298,44 @@ async def e2e_harness(
         await harness.aclose()
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def sliver_client(e2e_harness: SliverServerHarness) -> SliverClient:
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
+async def sliver_client(e2e_harness: SliverServerHarness) -> Client:
     client = e2e_harness.client
     if client is None:
         raise RuntimeError("the E2E harness did not create a Sliver client")
     return client
 
 
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
+@pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def mtls_listener(
-    sliver_client: SliverClient,
+    sliver_client: Client,
 ) -> AsyncIterator[MTLSListener]:
     # The listener request and readiness probe both use the IPv4 loopback
     # interface; the listener RPC itself is the authoritative bind.
-    port = free_loopback_port()
-    listener = await sliver_client.start_mtls_listener(
-        host="127.0.0.1",
-        port=port,
-        timeout=COMMAND_TIMEOUT,
+    async def start(port: int) -> models.clientpb.ListenerJob:
+        return await sliver_client.start_mtls_listener(
+            host="127.0.0.1",
+            port=port,
+            timeout=COMMAND_TIMEOUT,
+        )
+
+    port, listener = await _start_loopback_listener_with_retry(
+        sliver_client,
+        start,
     )
     assert isinstance(listener, models.clientpb.ListenerJob)
-    assert listener.job_id > 0
     value = MTLSListener(port=port, job_id=listener.job_id)
     try:
-        await _wait_for_loopback_listener(port)
         yield value
     finally:
         try:
-            stopped = await asyncio.wait_for(
-                sliver_client.kill_job(value.job_id, timeout=COMMAND_TIMEOUT),
-                timeout=COMMAND_TIMEOUT,
-            )
-            assert stopped.success
-            await _wait_for_job_removal(sliver_client, value.job_id)
+            await _stop_listener_job(sliver_client, value.job_id)
         except Exception as error:
             raise RuntimeError("failed to stop the shared mTLS listener") from error
 
 
 async def _wait_for_session(
-    client: SliverClient,
+    client: Client,
     process: ManagedProcess,
     *,
     previous_ids: set[str],
@@ -293,7 +348,12 @@ async def _wait_for_session(
             raise RuntimeError(
                 f"native session exited before registration: {process.diagnostics()}"
             )
-        last_seen = await client.sessions(timeout=COMMAND_TIMEOUT)
+        remaining = deadline - asyncio.get_running_loop().time()
+        rpc_timeout = max(1, min(COMMAND_TIMEOUT, math.ceil(remaining)))
+        last_seen = await asyncio.wait_for(
+            client.sessions(timeout=rpc_timeout),
+            timeout=remaining,
+        )
         for session in last_seen:
             if (
                 session.id not in previous_ids
@@ -311,7 +371,7 @@ async def _wait_for_session(
 
 
 async def _wait_for_beacon(
-    client: SliverClient,
+    client: Client,
     process: ManagedProcess,
     *,
     previous_ids: set[str],
@@ -324,7 +384,12 @@ async def _wait_for_beacon(
             raise RuntimeError(
                 f"native beacon exited before registration: {process.diagnostics()}"
             )
-        last_seen = await client.beacons(timeout=COMMAND_TIMEOUT)
+        remaining = deadline - asyncio.get_running_loop().time()
+        rpc_timeout = max(1, min(COMMAND_TIMEOUT, math.ceil(remaining)))
+        last_seen = await asyncio.wait_for(
+            client.beacons(timeout=rpc_timeout),
+            timeout=remaining,
+        )
         for beacon in last_seen:
             if (
                 beacon.id not in previous_ids
@@ -341,17 +406,76 @@ async def _wait_for_beacon(
     )
 
 
+async def _wait_for_session_removal(
+    client: Client,
+    session_id: str,
+    timeout: float = 30.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError(f"session {session_id} was not removed")
+        rpc_timeout = max(1, min(COMMAND_TIMEOUT, math.ceil(remaining)))
+        if await asyncio.wait_for(
+            client.session_by_id(session_id, timeout=rpc_timeout),
+            timeout=remaining,
+        ) is None:
+            return
+        await asyncio.sleep(min(POLL_INTERVAL, remaining))
+
+
+async def _wait_for_beacon_removal(
+    client: Client,
+    beacon_id: str,
+    timeout: float = 30.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError(f"beacon {beacon_id} was not removed")
+        rpc_timeout = max(1, min(COMMAND_TIMEOUT, math.ceil(remaining)))
+        if await asyncio.wait_for(
+            client.beacon_by_id(beacon_id, timeout=rpc_timeout),
+            timeout=remaining,
+        ) is None:
+            return
+        await asyncio.sleep(min(POLL_INTERVAL, remaining))
+
+
+async def _wait_for_build_removal(
+    client: Client,
+    implant_name: str,
+    timeout: float = 30.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise TimeoutError(f"implant build {implant_name!r} was not removed")
+        rpc_timeout = max(1, min(COMMAND_TIMEOUT, math.ceil(remaining)))
+        builds = await asyncio.wait_for(
+            client.implant_builds(timeout=rpc_timeout),
+            timeout=remaining,
+        )
+        if implant_name not in builds:
+            return
+        await asyncio.sleep(min(POLL_INTERVAL, remaining))
+
+
 @pytest_asyncio.fixture(scope="module", loop_scope="session")
 async def live_session(
     e2e_harness: SliverServerHarness,
     e2e_settings: E2ESettings,
-    sliver_client: SliverClient,
+    sliver_client: Client,
     mtls_listener: MTLSListener,
 ) -> AsyncIterator[LiveSession]:
     previous_ids = {session.id for session in await sliver_client.sessions()}
     generated: models.clientpb.Generate | None = None
     executable: Path | None = None
     process: ManagedProcess | None = None
+    work_dir: Path | None = None
     target: models.clientpb.Session | None = None
     try:
         generated, executable = await _generate_implant_with_example(
@@ -362,9 +486,12 @@ async def live_session(
             is_beacon=False,
         )
         assert isinstance(generated, models.clientpb.Generate)
+        process_name = f"session-{generated.implant_name}"
+        work_dir = e2e_harness.implant_root / process_name
         process = e2e_harness.launch_implant(
             executable,
-            name=f"session-{generated.implant_name}",
+            name=process_name,
+            work_dir=work_dir,
         )
         target = await _wait_for_session(
             sliver_client,
@@ -380,6 +507,7 @@ async def live_session(
         yield LiveSession(
             generated=generated,
             executable=executable,
+            work_dir=work_dir,
             process=process,
             target=target,
             interactive=interactive,
@@ -396,13 +524,7 @@ async def live_session(
                     ),
                     timeout=COMMAND_TIMEOUT,
                 )
-                assert (
-                    await sliver_client.session_by_id(
-                        target.id,
-                        timeout=COMMAND_TIMEOUT,
-                    )
-                    is None
-                )
+                await _wait_for_session_removal(sliver_client, target.id)
             except Exception as error:
                 cleanup_failures.append(("remove session", error))
         if process is not None:
@@ -416,8 +538,9 @@ async def live_session(
                     generated.implant_name,
                     timeout=COMMAND_TIMEOUT,
                 )
-                assert generated.implant_name not in await sliver_client.implant_builds(
-                    timeout=COMMAND_TIMEOUT
+                await _wait_for_build_removal(
+                    sliver_client,
+                    generated.implant_name,
                 )
             except Exception as error:
                 cleanup_failures.append(("delete session build", error))
@@ -431,13 +554,14 @@ async def live_session(
 async def live_beacon(
     e2e_harness: SliverServerHarness,
     e2e_settings: E2ESettings,
-    sliver_client: SliverClient,
+    sliver_client: Client,
     mtls_listener: MTLSListener,
 ) -> AsyncIterator[LiveBeacon]:
     previous_ids = {beacon.id for beacon in await sliver_client.beacons()}
     generated: models.clientpb.Generate | None = None
     executable: Path | None = None
     process: ManagedProcess | None = None
+    work_dir: Path | None = None
     target: models.clientpb.Beacon | None = None
     interactive: InteractiveBeacon | None = None
     try:
@@ -449,9 +573,12 @@ async def live_beacon(
             is_beacon=True,
         )
         assert isinstance(generated, models.clientpb.Generate)
+        process_name = f"beacon-{generated.implant_name}"
+        work_dir = e2e_harness.implant_root / process_name
         process = e2e_harness.launch_implant(
             executable,
-            name=f"beacon-{generated.implant_name}",
+            name=process_name,
+            work_dir=work_dir,
         )
         target = await _wait_for_beacon(
             sliver_client,
@@ -467,6 +594,7 @@ async def live_beacon(
         yield LiveBeacon(
             generated=generated,
             executable=executable,
+            work_dir=work_dir,
             process=process,
             target=target,
             interactive=interactive,
@@ -493,13 +621,7 @@ async def live_beacon(
                     ),
                     timeout=COMMAND_TIMEOUT,
                 )
-                assert (
-                    await sliver_client.beacon_by_id(
-                        target.id,
-                        timeout=COMMAND_TIMEOUT,
-                    )
-                    is None
-                )
+                await _wait_for_beacon_removal(sliver_client, target.id)
             except Exception as error:
                 cleanup_failures.append(("remove beacon", error))
         if generated is not None and generated.implant_name:
@@ -508,8 +630,9 @@ async def live_beacon(
                     generated.implant_name,
                     timeout=COMMAND_TIMEOUT,
                 )
-                assert generated.implant_name not in await sliver_client.implant_builds(
-                    timeout=COMMAND_TIMEOUT
+                await _wait_for_build_removal(
+                    sliver_client,
+                    generated.implant_name,
                 )
             except Exception as error:
                 cleanup_failures.append(("delete beacon build", error))

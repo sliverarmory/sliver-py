@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import ctypes
+import errno
 import inspect
 import os
 import platform
@@ -24,14 +25,16 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
-from sliver import SliverClient, SliverClientConfig, models
+from sliver import Client, SliverClientConfig, models
 
 LOOPBACK_HOST = "127.0.0.1"
 E2E_GATE_ENV = "SLIVER_E2E"
+PORT_BIND_ATTEMPTS = 3
 
 _SUPPORTED_TARGETS = {
     ("darwin", "arm64"),
@@ -48,6 +51,12 @@ _SENSITIVE_FIELD = re.compile(
     r'(?i)("?(?:token|private_key|client_private_key)"?\s*[:=]\s*)'
     r'("(?:[^"\\]|\\.)*"|\S+)',
 )
+_BIND_CONFLICT = re.compile(
+    r"(?i)(?:address already in use|eaddrinuse|wsaeaddrinuse|"
+    r"only one usage of each socket address)"
+)
+
+_ResultT = TypeVar("_ResultT")
 
 
 class E2EHarnessError(RuntimeError):
@@ -561,7 +570,10 @@ class ManagedProcess:
                     self._stop_windows(grace_timeout, kill_timeout)
                 else:
                     self._stop_unix(grace_timeout, kill_timeout)
-            finally:
+            except Exception:
+                # Preserve the containment handle and allow teardown to retry.
+                raise
+            else:
                 if os.name == "nt":
                     _close_windows_handle(self._windows_job)
                     self._windows_job = None
@@ -617,18 +629,73 @@ class ManagedProcess:
                         ) from None
 
 
-def free_loopback_port() -> int:
+def is_bind_conflict(error: BaseException) -> bool:
+    """Return whether an exception chain explicitly reports a port collision."""
+
+    current: BaseException | None = error
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(current, OSError) and current.errno in {
+            errno.EADDRINUSE,
+            10048,  # WSAEADDRINUSE
+        }:
+            return True
+        if _BIND_CONFLICT.search(str(current)):
+            return True
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif not current.__suppress_context__:
+            current = current.__context__
+        else:
+            current = None
+    return False
+
+
+def free_loopback_port(*, exclude: Collection[int] = ()) -> int:
     """Reserve and release an ephemeral IPv4 loopback TCP port."""
 
-    for _ in range(16):
+    excluded = set(exclude)
+    for _ in range(32):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
             listener.bind((LOOPBACK_HOST, 0))
             listener.listen(1)
             port = int(listener.getsockname()[1])
         # Sliver treats 65535 as invalid even though the OS can allocate it.
-        if port < 65535:
+        if port < 65535 and port not in excluded:
             return port
     raise E2EHarnessError("could not allocate a Sliver-compatible loopback port")
+
+
+async def retry_bind_conflicts(
+    operation: Callable[[int], Awaitable[_ResultT]],
+    *,
+    reset: Callable[[], Awaitable[None]] | None = None,
+    attempts: int = PORT_BIND_ATTEMPTS,
+) -> _ResultT:
+    """Retry an entire loopback operation only after an evidenced bind conflict."""
+
+    if attempts <= 0:
+        raise ValueError("attempts must be greater than zero")
+
+    attempted_ports: set[int] = set()
+    for attempt in range(attempts):
+        port = free_loopback_port(exclude=attempted_ports)
+        attempted_ports.add(port)
+        try:
+            return await operation(port)
+        except Exception as error:
+            if attempt + 1 >= attempts or not is_bind_conflict(error):
+                raise
+            if reset is not None:
+                try:
+                    await reset()
+                except Exception as cleanup_error:
+                    raise E2EHarnessError(
+                        "failed to clean up an address-in-use retry attempt"
+                    ) from cleanup_error
+
+    raise AssertionError("bind-conflict retry loop did not return or raise")
 
 
 def isolated_server_env(
@@ -739,9 +806,12 @@ class SliverServerHarness:
 
     operator_name = "sliverpy-e2e"
 
-    def __init__(self, settings: E2ESettings):
+    def __init__(self, settings: E2ESettings, *, scenario: str = "suite"):
         _require_e2e_enabled()
+        if not _SAFE_NAME.fullmatch(scenario):
+            raise E2EHarnessError("E2E scenario name contains unsafe characters")
         self.settings = settings
+        self.scenario = scenario
         _mkdir_private(settings.results_root)
         _mkdir_private(settings.work_root)
         self.run_root = Path(
@@ -768,10 +838,10 @@ class SliverServerHarness:
 
         self.operator_config_path = self.run_root / "operator.cfg"
         self.server_log_path = self.log_root / (
-            f"sliver-server-{settings.target_os}-{settings.target_arch}.log"
+            f"sliver-server-{scenario}-{settings.target_os}-{settings.target_arch}.log"
         )
         self.operator_log_path = self.log_root / (
-            f"sliver-operator-{settings.target_os}-{settings.target_arch}.log"
+            f"sliver-operator-{scenario}-{settings.target_os}-{settings.target_arch}.log"
         )
         self.console_log_path = self.server_state_root / "logs" / "console.log"
         self.server_env = isolated_server_env(
@@ -784,7 +854,7 @@ class SliverServerHarness:
         self.port: int | None = None
         self.operator_config: SliverClientConfig | None = None
         self.server_process: ManagedProcess | None = None
-        self.client: SliverClient | None = None
+        self.client: Client | None = None
         self.version: models.clientpb.Version | None = None
         self._managed_processes: list[ManagedProcess] = []
         self._redactions: list[str] = []
@@ -792,7 +862,10 @@ class SliverServerHarness:
             self.server_log_path: settings.results_root / self.server_log_path.name,
             self.operator_log_path: settings.results_root / self.operator_log_path.name,
             self.console_log_path: settings.results_root
-            / f"sliver-console-{settings.target_os}-{settings.target_arch}.log",
+            / (
+                f"sliver-console-{scenario}-{settings.target_os}-"
+                f"{settings.target_arch}.log"
+            ),
         }
         self._started = False
         self._closed = False
@@ -804,12 +877,15 @@ class SliverServerHarness:
     async def __aexit__(self, exc_type, exc, traceback) -> bool:
         try:
             await self.aclose()
-        except E2EHarnessError:
+        except E2EHarnessError as cleanup_error:
             if exc_type is None:
                 raise
+            raise E2EHarnessError(
+                f"test body failed and E2E cleanup also failed: {cleanup_error}"
+            ) from exc
         return False
 
-    async def start(self) -> tuple[SliverClient, models.clientpb.Version]:
+    async def start(self) -> tuple[Client, models.clientpb.Version]:
         """Generate an operator, start the daemon, and connect SliverPy."""
 
         _require_e2e_enabled()
@@ -818,54 +894,11 @@ class SliverServerHarness:
         if self._started or self.server_process is not None:
             raise E2EHarnessError("Sliver E2E harness has already been started")
 
-        self.port = free_loopback_port()
         try:
-            self.operator_config = await asyncio.to_thread(
-                self._generate_operator_config, self.port
+            return await retry_bind_conflicts(
+                self._start_once,
+                reset=self._cleanup_start_attempt,
             )
-            self.server_process = ManagedProcess.launch(
-                self.settings.server_path,
-                (
-                    "daemon",
-                    "--lhost",
-                    LOOPBACK_HOST,
-                    "--lport",
-                    str(self.port),
-                    "--force",
-                    "--tailscale=false",
-                    "--enable-wg=false",
-                ),
-                cwd=self.settings.sliver_root,
-                env=self.server_env,
-                log_path=self.server_log_path,
-                label="sliver-server",
-            )
-            await self._wait_for_tcp()
-
-            client = SliverClient(self.operator_config)
-            try:
-                version = await asyncio.wait_for(
-                    client.connect(), timeout=self.settings.connect_timeout
-                )
-            except Exception:
-                await self._close_client(client)
-                raise self._server_failure(
-                    "SliverPy could not authenticate to the local daemon"
-                ) from None
-
-            if (
-                version.os != self.settings.target_os
-                or version.arch != self.settings.target_arch
-            ):
-                await self._close_client(client)
-                raise self._server_failure(
-                    "Sliver server target does not match the native E2E runner"
-                )
-
-            self.client = client
-            self.version = version
-            self._started = True
-            return client, version
         except E2EHarnessError:
             await self._cleanup_failed_start()
             raise
@@ -873,6 +906,61 @@ class SliverServerHarness:
             failure = self._server_failure("failed to start isolated Sliver server")
             await self._cleanup_failed_start()
             raise failure from None
+
+    async def _start_once(
+        self,
+        port: int,
+    ) -> tuple[Client, models.clientpb.Version]:
+        """Run one complete operator, daemon, and client startup attempt."""
+
+        self.port = port
+        self.operator_config = await asyncio.to_thread(
+            self._generate_operator_config,
+            port,
+        )
+        self.server_process = ManagedProcess.launch(
+            self.settings.server_path,
+            (
+                "daemon",
+                "--lhost",
+                LOOPBACK_HOST,
+                "--lport",
+                str(port),
+                "--force",
+                "--tailscale=false",
+                "--enable-wg=false",
+            ),
+            cwd=self.settings.sliver_root,
+            env=self.server_env,
+            log_path=self.server_log_path,
+            label="sliver-server",
+        )
+        await self._wait_for_tcp()
+
+        client = Client.from_config_file(self.operator_config_path)
+        try:
+            version = await asyncio.wait_for(
+                client.connect(), timeout=self.settings.connect_timeout
+            )
+        except Exception:
+            await self._close_client(client)
+            raise self._server_failure(
+                "SliverPy could not authenticate to the local daemon"
+            ) from None
+
+        if (
+            version.os != self.settings.target_os
+            or version.arch != self.settings.target_arch
+        ):
+            await self._close_client(client)
+            raise self._server_failure(
+                "Sliver server target does not match the native E2E runner"
+            )
+
+        self.client = client
+        self.version = version
+        self._started = True
+        return client, version
 
     def track_process(self, process: ManagedProcess) -> ManagedProcess:
         """Register a managed child for reverse-order harness cleanup."""
@@ -1074,7 +1162,7 @@ class SliverServerHarness:
                 await writer.wait_closed()
             return
 
-    async def _close_client(self, client: SliverClient) -> None:
+    async def _close_client(self, client: Client) -> None:
         close = getattr(client, "close", None)
         if callable(close):
             result = close()
@@ -1104,6 +1192,42 @@ class SliverServerHarness:
             except OSError:
                 continue
 
+    async def _cleanup_start_attempt(self) -> None:
+        """Reset partial startup state before trying a different loopback port."""
+
+        failures: list[str] = []
+        if self.client is not None:
+            try:
+                await self._close_client(self.client)
+            except Exception:
+                failures.append("failed to close partial SliverPy client")
+            else:
+                self.client = None
+
+        if self.server_process is not None:
+            try:
+                await self.server_process.astop(
+                    self.settings.process_grace_timeout,
+                    self.settings.process_kill_timeout,
+                )
+            except E2EHarnessError:
+                failures.append("failed to stop partial Sliver server")
+            else:
+                self.server_process = None
+
+        if not failures:
+            try:
+                self.operator_config_path.unlink(missing_ok=True)
+            except OSError:
+                failures.append("failed to remove partial operator configuration")
+
+        self.operator_config = None
+        self.version = None
+        self.port = None
+        self._started = False
+        if failures:
+            raise E2EHarnessError("; ".join(failures))
+
     async def _cleanup_failed_start(self) -> None:
         with contextlib.suppress(Exception):
             await self.aclose()
@@ -1115,10 +1239,13 @@ __all__ = [
     "E2ESettings",
     "LOOPBACK_HOST",
     "ManagedProcess",
+    "PORT_BIND_ATTEMPTS",
     "SliverServerHarness",
     "free_loopback_port",
+    "is_bind_conflict",
     "isolated_server_env",
     "launch_managed_implant",
     "read_log_tail",
+    "retry_bind_conflicts",
     "sanitized_implant_env",
 ]

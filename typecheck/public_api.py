@@ -59,6 +59,8 @@ def model_contract() -> None:
     event = Event(event_type="session-connected", session=session)
     generated = Generate(file=File(name="implant", data=b"payload"))
     config = ImplantConfig(format=OutputFormat.EXECUTABLE)
+    goos: GOOS = GOOS.FREEBSD
+    goarch: GOARCH = GOARCH.RISCV64
 
     assert_type(session, Session)
     assert_type(session.id, str)
@@ -67,6 +69,8 @@ def model_contract() -> None:
     assert_type(event.session, Session | None)
     assert_type(generated.file, File | None)
     assert_type(OutputFormat.EXECUTABLE, OutputFormat)
+    assert_type(goos, GOOS)
+    assert_type(goarch, GOARCH)
     assert_type(config.format, OutputFormat)
     assert_type(get_pydantic_model(Event), type[Event])
 

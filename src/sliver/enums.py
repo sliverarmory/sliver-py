@@ -21,19 +21,42 @@ class _StringEnum(str, Enum):
 
 
 class GOOS(_StringEnum):
-    """Operating systems supported by Sliver's implant compiler."""
+    """Active GOOS values in Sliver's pinned Go toolchain target list."""
 
+    AIX = "aix"
+    ANDROID = "android"
     DARWIN = "darwin"
+    DRAGONFLY = "dragonfly"
+    FREEBSD = "freebsd"
+    ILLUMOS = "illumos"
+    IOS = "ios"
+    JS = "js"
     LINUX = "linux"
+    NETBSD = "netbsd"
+    OPENBSD = "openbsd"
+    PLAN9 = "plan9"
+    SOLARIS = "solaris"
+    WASIP1 = "wasip1"
     WINDOWS = "windows"
 
 
 class GOARCH(_StringEnum):
-    """CPU architectures supported by Sliver's implant compiler."""
+    """Active GOARCH values in Sliver's pinned Go toolchain target list."""
 
     I386 = "386"
     AMD64 = "amd64"
+    ARM = "arm"
     ARM64 = "arm64"
+    LOONG64 = "loong64"
+    MIPS = "mips"
+    MIPS64 = "mips64"
+    MIPS64LE = "mips64le"
+    MIPSLE = "mipsle"
+    PPC64 = "ppc64"
+    PPC64LE = "ppc64le"
+    RISCV64 = "riscv64"
+    S390X = "s390x"
+    WASM = "wasm"
 
 
 class ConnectionStrategy(_StringEnum):

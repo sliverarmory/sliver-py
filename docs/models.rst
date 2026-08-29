@@ -14,8 +14,8 @@ Human-facing domain models
 The package root exports small Pydantic models for concepts that otherwise
 require many schema fields or repeated literal values:
 
-* :class:`sliver.Target` validates a supported :class:`sliver.GOOS` and
-  :class:`sliver.GOARCH` pair;
+* :class:`sliver.Target` validates a first-class Sliver
+  :class:`sliver.GOOS` and :class:`sliver.GOARCH` pair;
 * :class:`sliver.C2Endpoint` constructs and normalizes supported C2 URLs;
 * :class:`sliver.BeaconOptions` and :class:`sliver.ShellcodeOptions` validate
   mode-specific generation settings;

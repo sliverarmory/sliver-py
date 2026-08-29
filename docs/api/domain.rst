@@ -13,6 +13,9 @@ Use typed operating-system and architecture members instead of raw strings.
 ``Target.current()`` maps a supported Python host to its Sliver compiler target
 and raises :class:`sliver.UnsupportedTargetError` otherwise. ``goos`` and
 ``goarch`` remain read-only compatibility views of ``os`` and ``arch``.
+The target model intentionally accepts Sliver's first-class implant matrix;
+the broader enum vocabulary also describes generic/default builds and other
+compiler metadata.
 
 .. autoclass:: sliver.Target
     :members:

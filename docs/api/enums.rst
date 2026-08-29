@@ -9,6 +9,14 @@ the generated Pydantic schema.
 Compiler targets and protocols
 ------------------------------
 
+``GOOS`` and ``GOARCH`` contain the complete active value sets from ``go tool
+dist list`` for the Go toolchain pinned by this SliverPy release. Go names for
+retired, broken, or future ports are intentionally excluded. Not every
+Cartesian-product pair is a Go target, and Sliver distinguishes its
+first-class implant targets from generic/default builds. Query the connected
+server's compiler information when availability for a specific pair or output
+format matters.
+
 .. autoclass:: sliver.GOOS
     :members:
 

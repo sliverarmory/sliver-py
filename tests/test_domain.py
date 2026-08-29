@@ -63,6 +63,42 @@ def test_canonical_enum_values() -> None:
     assert ShellcodeHeaders.KEEP == 2
 
 
+def test_go_target_enums_cover_sliver_toolchain_values() -> None:
+    assert {member.value for member in GOOS} == {
+        "aix",
+        "android",
+        "darwin",
+        "dragonfly",
+        "freebsd",
+        "illumos",
+        "ios",
+        "js",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "plan9",
+        "solaris",
+        "wasip1",
+        "windows",
+    }
+    assert {member.value for member in GOARCH} == {
+        "386",
+        "amd64",
+        "arm",
+        "arm64",
+        "loong64",
+        "mips",
+        "mips64",
+        "mips64le",
+        "mipsle",
+        "ppc64",
+        "ppc64le",
+        "riscv64",
+        "s390x",
+        "wasm",
+    }
+
+
 @pytest.mark.parametrize(
     ("system", "machine", "expected"),
     [

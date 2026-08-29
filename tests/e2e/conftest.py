@@ -4,6 +4,7 @@ import asyncio
 import math
 import os
 import sys
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
@@ -32,6 +33,16 @@ REGISTRATION_TIMEOUT = 3 * 60
 COMMAND_TIMEOUT = 2 * 60
 INTERACTION_SCENARIO_TIMEOUT = 5 * 60
 POLL_INTERVAL = 0.25
+SLIVER_NAME_MAX_LENGTH = 32
+
+
+def unique_sliver_name(prefix: str) -> str:
+    """Return an allowed unique name within Sliver's rename limit."""
+
+    suffix_length = SLIVER_NAME_MAX_LENGTH - len(prefix)
+    if suffix_length < 8:
+        raise ValueError("prefix leaves too little room for a unique suffix")
+    return f"{prefix}{uuid.uuid4().hex[:suffix_length]}"
 
 
 @dataclass(frozen=True, slots=True)

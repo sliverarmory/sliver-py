@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import re
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -131,6 +132,13 @@ def test_loopback_port_retries_the_value_sliver_rejects(
     port = free_loopback_port()
 
     assert port == 31337
+
+
+def test_unique_sliver_name_respects_the_server_rename_contract() -> None:
+    name = e2e_conftest.unique_sliver_name("session-e2e-")
+
+    assert len(name) == e2e_conftest.SLIVER_NAME_MAX_LENGTH
+    assert re.fullmatch(r"[A-Za-z0-9_.-]+", name)
 
 
 def test_loopback_port_excludes_ports_used_by_prior_attempts(

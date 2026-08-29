@@ -15,6 +15,7 @@ from .conftest import (
     LiveSession,
     MTLSListener,
     run_example_cli,
+    unique_sliver_name,
 )
 from .harness import E2ESettings, SliverServerHarness
 from .interactions import (
@@ -68,7 +69,7 @@ async def test_client_resolves_renames_and_uses_the_live_session(
     assert isinstance(interaction, InteractiveSession)
     assert interaction.session_id == target.id
 
-    updated_name = f"session-e2e-{uuid.uuid4().hex}"
+    updated_name = unique_sliver_name("session-e2e-")
     await sliver_client.rename_session(target.id, updated_name)
     try:
         renamed = await sliver_client.get_session(target.id)

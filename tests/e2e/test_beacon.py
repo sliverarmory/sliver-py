@@ -15,6 +15,7 @@ from .conftest import (
     LiveBeacon,
     MTLSListener,
     run_example_cli,
+    unique_sliver_name,
 )
 from .harness import E2ESettings, SliverServerHarness
 from .interactions import (
@@ -69,7 +70,7 @@ async def test_client_resolves_renames_and_uses_the_live_beacon(
     assert isinstance(interaction, InteractiveBeacon)
     assert interaction.beacon_id == target.id
 
-    updated_name = f"beacon-e2e-{uuid.uuid4().hex}"
+    updated_name = unique_sliver_name("beacon-e2e-")
     await sliver_client.rename_beacon(target.id, updated_name)
     try:
         renamed = await sliver_client.get_beacon(target.id)

@@ -8,4 +8,7 @@ API
     clients
     commands
     configuration
+    domain
+    enums
+    errors
     sessions

@@ -1,14 +1,22 @@
-FROM python:3.8-bullseye
+FROM ghcr.io/astral-sh/uv:0.12.7 AS uv
+
+FROM python:3.12-slim-bookworm
+
+ENV PATH="/sliver-py/.venv/bin:$PATH" \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends --yes curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /uvx /bin/
 
 WORKDIR /sliver-py
-RUN apt-get update -y && apt-get upgrade -y  && apt-get install curl -y 
 
+# Install dependencies separately so source-only changes reuse the dependency layer.
+COPY pyproject.toml uv.lock README.md LICENSE ./
+RUN uv sync --frozen --no-install-project
 
-# Configure hatch
-RUN python3 -m pip install --upgrade pip hatch
-RUN hatch config set dirs.env.virtual .venv && hatch config update
-
-
-# This is a little backwards than usual since we need the dynamic version for 'hatch env' so we copy everything
 COPY . .
-RUN hatch env create dev
+RUN uv sync --frozen

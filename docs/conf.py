@@ -11,19 +11,15 @@
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 import os
 import sys
-from subprocess import PIPE, Popen
 
 DOCS = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.abspath(os.path.join(DOCS, "..", "src")))
 
 # -- Project information -----------------------------------------------------
-# VERSION = Popen(['git', 'describe', '--abbrev=0'], stdout=PIPE).communicate()[0].decode('utf-8').strip()
-# AUTHOR = 'moloch'
-
 project = "SliverPy"
 copyright = "2022, moloch"
 author = "moloch"
-release = "0.0.17"
+release = "0.1.0"
 
 # -- General configuration ---------------------------------------------------
 
@@ -63,7 +59,3 @@ html_theme_options = {
     "collapse_navigation": False,
     "sticky_navigation": True,
 }
-# Add any paths that contain custom static files (such as style sheets) here,
-# relative to this directory. They are copied after the builtin static files,
-# so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ["_static"]

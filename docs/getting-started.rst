@@ -1,18 +1,21 @@
-Getting Started
+Getting started
 ===============
 
-To get started first download the `latest Sliver server release <https://github.com/BishopFox/sliver/releases/latest>`_ 
-you'll need v1.5 or later to use SliverPy.
+SliverPy connects to a Sliver server's multiplayer gRPC endpoint. The v0.1 API
+is generated from the Sliver definitions at the exact submodule commit recorded
+by this repository. For reproducible development and testing, build the server
+from that pinned commit rather than assuming another Sliver revision has the
+same API.
 
-SliverPy connects to the Sliver server using "multiplayer mode" which can be enabled in the server console or using
-the Sliver server's command line interface. In order to connect to the server you'll need to first generate an operator 
-configuration file. Clients connect to the Sliver server using mutual TLS (mTLS) and these operator configuration files 
-contain the per-user TLS certificates (and other metadata) needed to make the connection to the server. These configuration
-files contain the user's private key and should be treated as if they were a credential.
+Create an operator configuration
+--------------------------------
 
-In the interactive console, the ``new-operator`` command is used to generate an operator configuration file. You'll need to 
-subsequently enable multiplayer mode using the ``multiplayer`` command to start the multiplayer server listener. See the 
-``--help`` for each of these commands for more details:
+An operator configuration contains a per-user private key, TLS certificate,
+token, and connection metadata. Treat the file as a credential and do not
+commit it to source control.
+
+From the Sliver interactive console, create an operator and start multiplayer
+mode:
 
 .. code-block:: console
 
@@ -25,233 +28,272 @@ subsequently enable multiplayer mode using the ``multiplayer`` command to start 
     sliver > multiplayer
     [*] Multiplayer mode enabled!
 
-
-Alternatively, the command line interface can be used to generate operator configuration files and start the multiplayer listener
-without entering into the interactive console. See each subcommand's ``--help`` for more details:
+The server command-line interface can perform the same setup without entering
+the interactive console:
 
 .. code-block:: console
 
     $ ./sliver-server operator --name zer0cool --lhost localhost --save ./zer0cool.cfg
     $ ./sliver-server daemon
 
+Connect with an owned client
+----------------------------
 
-Now with the server running in the background you can connect to Sliver remotely (or locally) using the ``.cfg`` with SliverPy!
+SliverPy uses ``asyncio``. :meth:`sliver.Client.from_config_file` constructs a
+validated client and resolves the configuration path in this order:
 
-Connect Example
-^^^^^^^^^^^^^^^^
+#. an explicit path passed to the factory;
+#. the ``SLIVER_CONFIG`` environment variable; and
+#. ``~/.sliver-client/configs/default.cfg``.
 
-SliverPy is implemented using ``asyncio``, if you're unfamiliar with Python's ``asyncio`` you may want to go read up on it before continuing. 
-I recommend starting with `this presentation <https://www.youtube.com/watch?v=9zinZmE3Ogk>`_ by Raymond Hettinger if you're completely unfamiliar with Python threads/asyncio.
-
-The main class is ``SliverClient``, which when paired with a configuration file, allows you to interact with the Sliver server, sessions, and beacons:
+Use the client as an async context manager. Entering connects it; exiting stops
+its event/task dispatcher before closing the gRPC channel, even if the body
+raises:
 
 .. code-block:: python
 
     #!/usr/bin/env python3
 
-    import os
     import asyncio
-    from sliver import SliverClientConfig, SliverClient
 
-    CONFIG_PATH = os.path.join('path', 'to', 'default.cfg')
+    from sliver import Client
 
-    async def main():
-        ''' Async client connect example '''
-        config = SliverClientConfig.parse_config_file(CONFIG_PATH)
-        client = SliverClient(config)
-        await client.connect()
-        sessions = await client.sessions()
-        print('Sessions: %r' % sessions)
 
-    if __name__ == '__main__':
+    async def main() -> None:
+        async with Client.from_config_file() as client:
+            version = await client.version()
+            print(
+                f"Connected to Sliver "
+                f"{version.major}.{version.minor}.{version.patch}"
+            )
+
+            inventory = await client.inventory()
+            for session in inventory.sessions:
+                print(session.id, session.name, session.remote_address)
+
+
+    if __name__ == "__main__":
         asyncio.run(main())
 
+For dependency injection or programmatic configuration, construct an
+:class:`sliver.OperatorConfig` and pass it to :class:`sliver.Client`. Manual
+ownership also remains supported with ``await client.connect()`` and
+``await client.close()``; ``close()`` and ``aclose()`` are idempotent, and a
+closed client can be connected again.
 
-Protobuf / gRPC
-^^^^^^^^^^^^^^^
+Use enums and domain models
+---------------------------
 
-Under the hood SliverPy is communicating with the Sliver server using `Protobuf <https://developers.google.com/protocol-buffers/docs/pythontutorial>`_ and 
-`gRPC <https://grpc.io/docs/languages/python/basics/>`_. While most of the details of these libraries are abstracted for you, it may be useful to familiarize 
-yourself with the library conventions as SliverPy operates largely on Protobuf objects which do not follow Python language conventions.
+The package root exports typed constants for operating systems, architectures,
+event names, protocols, output formats, encoders, registry values, and other
+closed sets. String-valued enums also subclass ``str`` for compatibility with
+existing validation and serialization boundaries. Prefer members such as
+:attr:`sliver.GOOS.LINUX`, :attr:`sliver.GOARCH.AMD64`, and
+:attr:`sliver.EventType.SESSION_CONNECTED` over repeated literal strings.
 
-There are three modules of Protobuf objects:
-
-- ``sliver.commonpb_pb2`` Contains common Protobuf objects that represent things like files and processes.
-- ``sliver.client_pb2``  Contains objects that are specifically passed between the client and server, but *not* to the implant.
-- ``sliver.sliver_pb2`` Contains objects that are passed to the client, server, and implant.
-
-**NOTE:** Protobuf objects use ``CapitolCase`` whereas the SliverPy classes/etc. use ``snake_case``.
-
-These modules contain generated code and are not easy to read. However, the source Protobuf definitions are in the `Sliver server repository <https://github.com/BishopFox/sliver/tree/master/protobuf>`_ 
-to find the exact definitions that SliverPy is using see the `git submodule <https://github.com/moloch--/sliver-py>`_ in the SliverPy repository.
-
-
-Interactive Sessions
-^^^^^^^^^^^^^^^^^^^^
-
-To interact with a Sliver session we need to create an ``InteractiveSession`` object, the easiest way to do this is using the ``SliverClient``'s 
-``.interact_session()`` method, which takes a session ID and returns an ``InteractiveSession`` for that ID:
+Common multi-field workflows use small Pydantic domain models. For example,
+:class:`sliver.ImplantSpec` validates a target, C2 endpoints, beacon timing, and
+output settings before converting them to Sliver's generated request models:
 
 .. code-block:: python
 
-    #!/usr/bin/env python3
-
-    import os
     import asyncio
-    from sliver import SliverClientConfig, SliverClient
+    from pathlib import Path
 
-    # Construct path to operator config file
-    CONFIG_PATH = os.path.join('path', 'to', 'operator.cfg')
-
-    async def main():
-        ''' Session interact example '''
-        config = SliverClientConfig.parse_config_file(CONFIG_PATH)
-        client = SliverClient(config)
-        await client.connect()
-        sessions = await client.sessions()  # <-- List Protobuf Session objects
-        if not len(sessions):
-            print('No sessions!')
-            return
-
-        session = await client.interact_session(sessions[0].ID)  # <-- Create InteractiveSession object
-        ls = await session.ls()                                  # <-- Returns an Ls Protobuf object
-        print('Listing directory contents of: %s' % ls.Path)
-        for fi in ls.Files:
-            print('FileName: %s (dir: %s, size: %d)' % (fi.Name, fi.IsDir, fi.Size))
-
-    if __name__ == '__main__':
-        asyncio.run(main())
-
-**NOTE:** There are two "session" related objects the Protobuf ``client_pb2.Session`` object, which contains metadata about the sessions such as
-the session ID, the active C2 protocol, etc. and the ``InteractiveSession`` class, which is used to interact with the session (i.e., execute commands, etc).
+    from sliver import (
+        BeaconOptions,
+        C2Endpoint,
+        Client,
+        GOARCH,
+        GOOS,
+        ImplantSpec,
+        OutputFormat,
+        Target,
+    )
 
 
-Interactive Beacons
-^^^^^^^^^^^^^^^^^^^^
+    async def main() -> None:
+        async with Client.from_config_file() as client:
+            result = await client.generate(
+                ImplantSpec(
+                    target=Target(os=GOOS.LINUX, arch=GOARCH.AMD64),
+                    c2=[C2Endpoint.mtls("c2.example.test")],
+                    output_format=OutputFormat.EXECUTABLE,
+                    beacon=BeaconOptions(),
+                ),
+                name="web-server",
+            )
+            destination = result.save(Path("artifacts") / result.filename)
+            print(destination)
 
-To interact with a Sliver beacon we need to create an ``InteractiveBeacon`` object, the easiest way to do this is using the ``SliverClient``'s 
-``.interact_beacon()`` method, which takes a beacon ID and returns an ``InteractiveBeacon`` for that ID:
+
+    asyncio.run(main())
+
+The generated :class:`sliver.GeneratedImplant` contains the artifact and build
+metadata. Its ``save()`` method creates the destination exclusively by default;
+pass ``overwrite=True`` only when replacement is intentional. Advanced fields
+that are not represented by :class:`sliver.ImplantSpec` can be supplied through
+``generate(..., base_config=...)``. The concise fields always take precedence.
+
+See :doc:`api/domain` and :doc:`api/enums` for the complete human-facing model
+and constant surface. See :doc:`models` for descriptor-generated Pydantic
+models.
+
+Find, get, and use resources
+----------------------------
+
+Collection commands such as :meth:`sliver.Client.sessions`,
+:meth:`sliver.Client.beacons`, and :meth:`sliver.Client.jobs` return normal
+lists of generated Pydantic models. The lookup verbs encode absence explicitly:
+
+* ``find_session()``, ``find_beacon()``, and ``find_job()`` return ``None``;
+* ``get_session()``, ``get_beacon()``, and ``get_job()`` raise
+  :class:`sliver.ResourceNotFoundError`; and
+* ``use_session()``, ``use_beacon()``, and ``use(model)`` return an interactive
+  wrapper or raise :class:`sliver.ResourceNotFoundError`.
+
+For example:
 
 .. code-block:: python
 
-    #!/usr/bin/env python3
+    sessions = await client.sessions()
+    if sessions:
+        session = await client.use(sessions[0])
+        listing = await session.ls()
+        for entry in listing.files:
+            print(entry.name, entry.is_dir, entry.size)
 
-    import os
-    import asyncio
-    from sliver import SliverClientConfig, SliverClient
+An interaction's ``session`` or ``beacon`` property returns a defensive copy of
+the complete metadata model. Convenience properties expose common fields such
+as IDs, hostnames, operating systems, architectures, and process IDs. Both
+interaction types share the parent client's channel.
 
-    # Construct path to operator config file
-    CONFIG_PATH = os.path.join('path', 'to', 'operator.cfg')
+Beacon tasks and lifecycle commands
+-----------------------------------
 
-    async def main():
-        ''' Session interact example '''
-        config = SliverClientConfig.parse_config_file(CONFIG_PATH)
-        client = SliverClient(config)
-        await client.connect()
-        beacons = await client.beacons()  # <-- List Protobuf Session objects
-        if not len(beacons):
-            print('No beacons!')
-            return
-
-        beacon = await client.interact_beacon(beacons[0].ID)  # <-- Create InteractiveSession object
-        ls_task = await beacon.ls()                           # <-- Creates a beacon task Future
-        print('Created beacon task: %s' % ls_task)
-        print('Waiting for beacon task to complete ...')
-        ls = await ls_task
-
-        # Beacon Task has completed (Future was resolved)
-        print('Listing directory contents of: %s' % ls.Path)
-        for fi in ls.Files:
-            print('FileName: %s (dir: %s, size: %d)' % (fi.Name, fi.IsDir, fi.Size))
-
-
-    if __name__ == '__main__':
-        asyncio.run(main())
-
-**NOTE:** The main difference between interacting with a session vs. a beacon, is that a beacon's command will return a ``Future`` object that eventually resolves to the task result.
-
-
-Realtime Events
-^^^^^^^^^^^^^^^^
-
-SliverPy also supports realtime events, which are pushed from the server to the client whenever an event occurs. For example, some of the more common events you'll likely
-be interested in are when a new session is created or when a job starts/stops. 
-
-The :class:`SliverClient` implements these real time events using ``asyncio``.  
-
-Events are identified by an "event type," which is just a string set by the producer of the event. This loose form
-allows events to be very dynamic, however this also means there is no central authority for every event type. I 
-recommend always filtering on expected event types. The data included in an event also depends on whatever produced
-the event, so you should always check that an attribute exists before accessing that attribute (with the exception of 
-``event.EventType`` which must exist).
-
-Here is a non exhaustive list of event types:
-
-+--------------------------+-----+----------------------------------------------------+
-| Event Type               |     | Description                                        |
-+--------------------------+-----+----------------------------------------------------+
-| ``session-disconnected`` |     | An existing session was lost                       |
-+--------------------------+-----+----------------------------------------------------+
-| ``session-updated``      |     | An existing session was renamed / updated          |
-+--------------------------+-----+----------------------------------------------------+
-| ``job-started``          |     | A job was started on the server                    |
-+--------------------------+-----+----------------------------------------------------+
-| ``job-stopped``          |     | A job stopped (due to error or user action)        |
-+--------------------------+-----+----------------------------------------------------+
-| ``client-joined``        |     | A new client connected to the server               |
-+--------------------------+-----+----------------------------------------------------+
-| ``client-left``          |     | A client disconnected from the server              |
-+--------------------------+-----+----------------------------------------------------+
-| ``canary``               |     | A canary was burned / triggered / etc.             |
-+--------------------------+-----+----------------------------------------------------+
-| ``build``                |     | A modification was made to implant builds          |
-+--------------------------+-----+----------------------------------------------------+
-| ``build-completed``      |     | An implant build completed (in success or failure) |
-+--------------------------+-----+----------------------------------------------------+
-| ``profile``              |     | A modification was made to implant profiles        |
-+--------------------------+-----+----------------------------------------------------+
-| ``website``              |     | A modification was made to website(s)              |
-+--------------------------+-----+----------------------------------------------------+
-| ``beacon-registered``    |     | A new beacon connected to the server               |
-+---------------------------+----+----------------------------------------------------+
-| ``beacon-taskresult``    |     | A beacon task completed                            |
-+---------------------------+----+----------------------------------------------------+
-
-
-Automatically Interact With New Sessions
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-The ``SliverClient``'s ``.on()`` method returns an async generator, which can be iterated over. ``.on()`` accepts a string or a list of strings to filter events. 
-Additionally, ``.events()`` can be used to obtain a generator that will yield all events.
-
-Here is an example of using ``.on()`` to automatically interact with new sessions when they connect:
+An :class:`sliver.InteractiveBeacon` command queues a remote task and awaits its
+typed result, so callers use the same one-``await`` shape as a session command:
 
 .. code-block:: python
 
-    #!/usr/bin/env python3
+    beacons = await client.beacons()
+    if beacons:
+        beacon = await client.use(beacons[0])
+        listing = await beacon.ls()
+        print(listing.path)
 
-    import os
-    import asyncio
-    from sliver import SliverClientConfig, AsyncSliverClient, client_pb2
+The client owns one lazy event dispatcher shared by all beacon task waiters and
+event subscribers. Completion events that arrive just before waiter
+registration are retained in a bounded orphan cache so fast tasks are not lost.
+Success, command error, timeout, and cancellation all remove the local waiter.
+On timeout or local cancellation, SliverPy also asks the server to cancel the
+remote task when that RPC is supported. A deadline raises
+:class:`sliver.SliverTimeoutError`; cancelling the caller preserves
+``asyncio.CancelledError``.
 
-    CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".sliver-client", "configs")
-    CONFIG_PATH = os.path.join(CONFIG_DIR, "default.cfg")
+``InteractiveBeacon.close()`` remains safe for compatibility. A wrapper
+obtained from :class:`sliver.Client` does not own the shared dispatcher, so
+closing that wrapper does not stop other subscriptions or task waits. Closing
+an interaction never kills or removes the remote beacon.
 
+The command-aligned lifecycle methods have intentionally different meanings:
 
-    async def main():
-        ''' Client connect example '''
-        config = SliverClientConfig.parse_config_file(CONFIG_PATH)
-        client = AsyncSliverClient(config)
-        await client.connect()
-        async for event in client.on('session-connected'):
-            print('Automatically interacting with session %s' % event.Session.ID)
-            interact = await client.interact(event.Session.ID)
-            exec_result = await interact.execute('whoami', [], True)
-            print('Exec %r' % exec_result)
+* ``kill_beacon(beacon_id, force=False)`` queues Sliver's ``kill`` command for
+  the beacon and terminates the implant process when it executes; and
+* ``beacons_rm(beacon_id)`` invokes ``beacons rm`` and removes the server record
+  without terminating a running implant.
 
-    if __name__ == '__main__':
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(main())
+Use ``tasks(beacon_id)``, ``tasks_fetch(task_id)``, and
+``tasks_cancel(task_id)`` for Sliver's task-management command paths.
 
+Subscribe to realtime events
+----------------------------
 
-SliverPy should integrate well with any framework that supports ``asyncio``, but doing so is left
-as an exercise for the reader.
+:meth:`sliver.Client.events` is an async generator of
+``sliver.models.clientpb.Event`` objects. It accepts one
+:class:`sliver.EventType`, a string, a collection of either, or no filter:
+
+.. code-block:: python
+
+    from sliver import EventType
+
+    async for event in client.events(EventType.SESSION_CONNECTED):
+        if event.session is not None:
+            session = await client.use(event.session)
+            print(await session.execute("whoami"))
+
+For a bounded result, :meth:`sliver.Client.collect_events` owns and closes the
+subscription:
+
+.. code-block:: python
+
+    events = await client.collect_events(
+        EventType.JOB_STARTED,
+        EventType.JOB_STOPPED,
+        limit=2,
+        timeout=30,
+    )
+
+All subscribers share one underlying ``Events`` RPC. Each subscriber has a
+bounded queue; if it falls behind, the oldest queued event is discarded in
+favor of the newest, so this stream is not a durable replay log. Closing an
+async generator unregisters its subscriber. Closing the client closes every
+subscriber. An unexpected stream interruption is retried with capped
+exponential backoff; pending beacon command deadlines remain authoritative.
+
+The older ``on(event_types)`` spelling is a compatibility alias for filtered
+``events(event_types)`` iteration.
+
+Use the Pydantic RPC escape hatch
+---------------------------------
+
+If an RPC has no command-oriented convenience method, use ``client.rpc`` after
+connecting. It exposes every Sliver RPC with a snake-case Python name, validates
+the declared Pydantic request type, and returns the declared Pydantic response:
+
+.. code-block:: python
+
+    from sliver.models.clientpb import RenameReq
+
+    request = RenameReq(
+        session_id="session-id",
+        name="web-server",
+    )
+    await client.rpc.rename(request)
+
+The generated wire implementation remains private: external callers neither
+pass nor receive transport messages. Accessing ``rpc`` before connecting or
+after closing raises :class:`sliver.NotConnectedError`. The historical
+``pydantic_stub`` property and PascalCase RPC names remain compatibility
+aliases; new code should use ``rpc`` and snake_case.
+
+Handle high-level errors
+------------------------
+
+All handwritten exceptions derive from :class:`sliver.SliverError`:
+
+* :class:`sliver.NotConnectedError` means an operation needs a connected
+  client;
+* :class:`sliver.RPCError` normalizes a gRPC transport failure and records the
+  operation, status, and details while retaining the native exception as its
+  cause;
+* :class:`sliver.ResourceNotFoundError` means a required lookup failed;
+* :class:`sliver.CommandError` means Sliver completed a session or beacon
+  command with an error in its response model;
+* :class:`sliver.SliverTimeoutError` means a library-owned event or beacon-task
+  deadline expired and also subclasses the built-in ``TimeoutError``;
+* :class:`sliver.CleanupError` groups failures while releasing an owned
+  resource; and
+* :class:`sliver.UnsupportedTargetError` means the current host cannot be
+  represented as a supported target.
+
+Pydantic validation errors and ``asyncio.CancelledError`` retain their native
+types. See :doc:`api/errors` for attributes that support structured handling.
+
+Compatibility
+-------------
+
+The concise API is additive. Existing public spellings remain available while
+new code moves to command-aligned names and typed domain inputs. Compatibility
+aliases do not currently emit deprecation warnings. See :doc:`compatibility`
+for the mapping and the limits of the guarantee.

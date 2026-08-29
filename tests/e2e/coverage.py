@@ -1,0 +1,330 @@
+"""Checked-in denominator for the exported high-level native E2E surface."""
+
+from __future__ import annotations
+
+from sliver import GOARCH, GOOS
+
+SLIVER_RPC_TOTAL = 193
+
+# Exact pinned RPC identities reached by handwritten high-level methods. Keeping
+# identities rather than only a count prevents one removed RPC from being
+# concealed by a different newly reachable RPC.
+HIGH_LEVEL_RPC_NAMES = frozenset(
+    {
+        "backdoor",
+        "call_extension",
+        "canaries",
+        "cancel_beacon_task",
+        "cd",
+        "chtimes",
+        "cp",
+        "delete_implant_build",
+        "delete_implant_profile",
+        "download",
+        "events",
+        "execute",
+        "execute_assembly",
+        "execute_children",
+        "generate",
+        "generate_stage",
+        "generate_unique_ip",
+        "generate_wg_client_config",
+        "get_beacon_task_content",
+        "get_beacon_tasks",
+        "get_beacons",
+        "get_env",
+        "get_jobs",
+        "get_operators",
+        "get_sessions",
+        "get_system",
+        "get_version",
+        "grep",
+        "ifconfig",
+        "impersonate",
+        "implant_builds",
+        "implant_profiles",
+        "kill",
+        "kill_job",
+        "list_extensions",
+        "list_wasm_extensions",
+        "ls",
+        "make_token",
+        "migrate",
+        "mkdir",
+        "mount",
+        "msf",
+        "msf_remote",
+        "mv",
+        "netstat",
+        "ping",
+        "pivot_session_listeners",
+        "process_dump",
+        "ps",
+        "pwd",
+        "regenerate",
+        "register_extension",
+        "registry_create_key",
+        "registry_read",
+        "registry_write",
+        "remove_service",
+        "rename",
+        "rev_to_self",
+        "rm",
+        "rm_beacon",
+        "run_as",
+        "save_implant_profile",
+        "screenshot",
+        "set_env",
+        "shellcode_rdi",
+        "sideload",
+        "spawn_dll",
+        "start_dns_listener",
+        "start_http_listener",
+        "start_https_listener",
+        "start_mtls_listener",
+        "start_service",
+        "start_service_by_name",
+        "start_tcp_stager_listener",
+        "start_wg_listener",
+        "stop_service",
+        "task",
+        "terminate",
+        "unset_env",
+        "upload",
+        "website",
+        "website_add_content",
+        "website_remove",
+        "website_remove_content",
+        "website_update_content",
+        "websites",
+    }
+)
+HIGH_LEVEL_RPC_REACHABLE = len(HIGH_LEVEL_RPC_NAMES)
+
+NATIVE_TARGETS = frozenset(
+    {
+        (GOOS.DARWIN, GOARCH.ARM64),
+        (GOOS.LINUX, GOARCH.AMD64),
+        (GOOS.WINDOWS, GOARCH.AMD64),
+    }
+)
+
+# These names are invoked directly by managed E2E tests on every native target.
+NATIVE_E2E = frozenset(
+    {
+        "Client.aclose",
+        "Client.add_website_content",
+        "Client.beacon_by_id",
+        "Client.beacons",
+        "Client.canaries",
+        "Client.close",
+        "Client.connect",
+        "Client.delete_implant_build",
+        "Client.find_beacon",
+        "Client.find_job",
+        "Client.find_session",
+        "Client.from_config_file",
+        "Client.get_beacon",
+        "Client.get_job",
+        "Client.get_session",
+        "Client.http",
+        "Client.implant_builds",
+        "Client.inventory",
+        "Client.is_connected",
+        "Client.job_by_id",
+        "Client.job_by_port",
+        "Client.jobs",
+        "Client.kill_job",
+        "Client.kill_session",
+        "Client.operators",
+        "Client.on",
+        "Client.profiles",
+        "Client.profiles_new",
+        "Client.profiles_rm",
+        "Client.rename_beacon",
+        "Client.rename_session",
+        "Client.rm_beacon",
+        "Client.session_by_id",
+        "Client.sessions",
+        "Client.start_mtls_listener",
+        "Client.tasks",
+        "Client.tasks_fetch",
+        "Client.update_website_content",
+        "Client.update_website",
+        "Client.use",
+        "Client.version",
+        "Client.websites",
+        "Client.websites_rm",
+        "Client.websites_rm_content",
+        "Client.websites_show",
+        "Interactive.cd",
+        "Interactive.chtimes",
+        "Interactive.cp",
+        "Interactive.download",
+        "Interactive.env",
+        "Interactive.env_set",
+        "Interactive.env_unset",
+        "Interactive.execute",
+        "Interactive.execute_children",
+        "Interactive.grep",
+        "Interactive.ifconfig",
+        "Interactive.ls",
+        "Interactive.mkdir",
+        "Interactive.mount",
+        "Interactive.mv",
+        "Interactive.netstat",
+        "Interactive.ping",
+        "Interactive.ps",
+        "Interactive.pwd",
+        "Interactive.rm",
+        "Interactive.terminate",
+        "Interactive.upload",
+        "Interactive.wasm_ls",
+        "InteractiveBeacon.close",
+        "InteractiveSession.extensions_list",
+        "InteractiveSession.pivots",
+    }
+)
+
+# These exact public names run in subprocess examples within the managed suite.
+EXECUTED_EXAMPLE = frozenset(
+    {
+        "Client.collect_events",
+        "Client.generate",
+        "Client.temporary_mtls",
+        "Client.use_beacon",
+        "Client.use_session",
+    }
+)
+
+# The managed suite executes these implementations through another public name.
+TRANSITIVE_E2E = frozenset(
+    {
+        "Client.events",
+        "Client.mtls",
+        "Interactive.list_extensions",
+    }
+)
+
+# Compatibility spellings are tested as exact request-equivalent delegations.
+ALIAS_UNIT = frozenset(
+    {
+        "Client.beacon_task_content",
+        "Client.beacon_tasks",
+        "Client.beacons_rm",
+        "Client.delete_implant_profile",
+        "Client.fetch_task",
+        "Client.generate_implant",
+        "Client.implant_profiles",
+        "Client.implants",
+        "Client.implants_rm",
+        "Client.interact_beacon",
+        "Client.interact_session",
+        "Client.new_profile",
+        "Client.regenerate_implant",
+        "Client.remove_website",
+        "Client.remove_website_content",
+        "Client.rm_implant",
+        "Client.rm_profile",
+        "Client.rm_website",
+        "Client.rm_website_content",
+        "Client.save_implant_profile",
+        "Client.shellcode",
+        "Client.show_website",
+        "Client.start_dns_listener",
+        "Client.start_http_listener",
+        "Client.start_https_listener",
+        "Client.start_tcp_stager_listener",
+        "Client.start_wg_listener",
+        "Client.website",
+        "Client.wg_config",
+        "Interactive.get_env",
+        "Interactive.msf_remote",
+        "Interactive.process_dump",
+        "Interactive.registry_create",
+        "Interactive.revert_to_self",
+        "Interactive.run_as",
+        "Interactive.set_env",
+        "Interactive.spawn_dll",
+        "Interactive.unset_env",
+        "Interactive.wasm_list",
+        "InteractiveSession.pivot_listeners",
+        "InteractiveSession.stop_service",
+    }
+)
+
+# Safe, deterministic candidates that still need a managed native scenario.
+PLANNED_E2E = frozenset(
+    {
+        "Client.cancel_task",
+        "Client.kill_beacon",
+        "Client.profiles_generate",
+        "Client.regenerate",
+        "Client.tasks_cancel",
+    }
+)
+
+# These are intentionally outside the default portable lane because they need
+# controlled external services, target-specific artifacts, privileges, or
+# higher-risk process/network mutations.
+MANUAL_OR_SPECIALIZED = frozenset(
+    {
+        "Client.dns",
+        "Client.generate_stage",
+        "Client.generate_wg_client_config",
+        "Client.generate_wg_ip",
+        "Client.https",
+        "Client.profiles_stage",
+        "Client.shellcode_rdi",
+        "Client.stage_listener",
+        "Client.wg",
+        "Interactive.call_extension",
+        "Interactive.execute_assembly",
+        "Interactive.execute_shellcode",
+        "Interactive.get_system",
+        "Interactive.impersonate",
+        "Interactive.make_token",
+        "Interactive.migrate",
+        "Interactive.msf",
+        "Interactive.msf_inject",
+        "Interactive.procdump",
+        "Interactive.register_extension",
+        "Interactive.registry_create_key",
+        "Interactive.registry_read",
+        "Interactive.registry_write",
+        "Interactive.rev2self",
+        "Interactive.runas",
+        "Interactive.screenshot",
+        "Interactive.sideload",
+        "Interactive.spawndll",
+        "InteractiveSession.backdoor",
+        "InteractiveSession.getsystem",
+        "InteractiveSession.remove_service",
+        "InteractiveSession.services_start",
+        "InteractiveSession.services_stop",
+        "InteractiveSession.start_service",
+    }
+)
+
+COVERAGE_GROUPS = {
+    "native_e2e": NATIVE_E2E,
+    "executed_example": EXECUTED_EXAMPLE,
+    "transitive_e2e": TRANSITIVE_E2E,
+    "alias_unit": ALIAS_UNIT,
+    "planned_e2e": PLANNED_E2E,
+    "manual_or_specialized": MANUAL_OR_SPECIALIZED,
+}
+
+__all__ = [
+    "ALIAS_UNIT",
+    "COVERAGE_GROUPS",
+    "EXECUTED_EXAMPLE",
+    "HIGH_LEVEL_RPC_NAMES",
+    "HIGH_LEVEL_RPC_REACHABLE",
+    "MANUAL_OR_SPECIALIZED",
+    "NATIVE_E2E",
+    "NATIVE_TARGETS",
+    "PLANNED_E2E",
+    "SLIVER_RPC_TOTAL",
+    "TRANSITIVE_E2E",
+]

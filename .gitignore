@@ -1,6 +1,9 @@
 /.vscode
 /src/test*.py
 /workdir
+/.e2e-bin/
+/.e2e-results/
+/.e2e-work/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -53,6 +56,7 @@ coverage.xml
 *.py,cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 cover/
 
 # Translations
@@ -111,6 +115,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.uv-cache/
 env/
 venv/
 ENV/

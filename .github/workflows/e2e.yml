@@ -1,0 +1,204 @@
+name: Sliver E2E
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+      - "feat/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sliver-e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Pydantic API contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+          version: "0.12.7"
+
+      - name: Install development dependencies
+        run: uv sync --frozen
+
+      - name: Check formatting and lint
+        run: uv run --frozen ruff check src tests scripts examples typecheck
+
+      - name: Verify generated Pydantic API is current
+        run: |
+          uv run --frozen python scripts/pydanticgen.py --check
+          uv run --frozen python scripts/rpcgen.py --check
+          uv run --frozen python scripts/highlevelstubgen.py --check
+
+      - name: Check concrete public types
+        run: uv run --frozen mypy --no-incremental typecheck tests/typecheck
+
+      - name: Run unit and API contract tests
+        run: uv run --frozen pytest -vv -ra tests --ignore=tests/e2e
+
+      - name: Build documentation with warnings as errors
+        run: uv run --frozen sphinx-build -W --keep-going docs docs/_build/html
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Verify wheel contains the typed Pydantic API
+        run: uv run --frozen python scripts/verify_wheel.py dist/*.whl
+
+  e2e:
+    name: ${{ matrix.name }}
+    needs: quality
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - name: macOS arm64
+            id: macos-arm64
+            runner: macos-15
+            runner_arch: ARM64
+            goos: darwin
+            goarch: arm64
+            server_name: sliver-server
+          - name: Linux amd64
+            id: linux-amd64
+            runner: ubuntu-24.04
+            runner_arch: X64
+            goos: linux
+            goarch: amd64
+            server_name: sliver-server
+          - name: Windows amd64
+            id: windows-amd64
+            runner: windows-2022
+            runner_arch: X64
+            goos: windows
+            goarch: amd64
+            server_name: sliver-server.exe
+    defaults:
+      run:
+        shell: bash
+    env:
+      PYTHONUNBUFFERED: "1"
+      SLIVER_E2E: "1"
+      SLIVER_E2E_REPO_ROOT: ${{ github.workspace }}
+      SLIVER_E2E_SLIVER_ROOT: ${{ github.workspace }}/sliver
+      SLIVER_E2E_SERVER: ${{ github.workspace }}/.e2e-bin/${{ matrix.server_name }}
+      SLIVER_E2E_RESULTS_ROOT: ${{ github.workspace }}/.e2e-results/${{ matrix.id }}
+      SLIVER_E2E_TARGET_OS: ${{ matrix.goos }}
+      SLIVER_E2E_TARGET_ARCH: ${{ matrix.goarch }}
+      SLIVER_E2E_STARTUP_TIMEOUT: "600"
+      SLIVER_E2E_CONNECT_TIMEOUT: "120"
+      SLIVER_E2E_OPERATOR_TIMEOUT: "180"
+
+    steps:
+      - name: Check out pinned sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: sliver/go.mod
+          cache: true
+          cache-dependency-path: sliver/go.sum
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          python-version: "3.12"
+          version: "0.12.7"
+
+      - name: Verify pinned Sliver source and native target
+        run: |
+          test "$(git rev-parse HEAD:sliver)" = "$(git -C sliver rev-parse HEAD)"
+          test "$RUNNER_ARCH" = "${{ matrix.runner_arch }}"
+          test "$(go env GOOS)" = "${{ matrix.goos }}"
+          test "$(go env GOARCH)" = "${{ matrix.goarch }}"
+
+      - name: Prepare isolated E2E directories
+        run: |
+          mkdir -p .e2e-bin ".e2e-results/${{ matrix.id }}"
+          printf '%s\n' 'SLIVER_E2E_WORK_ROOT=${{ runner.temp }}/sliver-e2e-${{ matrix.id }}' >> "$GITHUB_ENV"
+
+      - name: Install test dependencies
+        run: >-
+          uv sync --frozen --group test
+          2>&1 | tee ".e2e-results/${{ matrix.id }}/uv-sync.log"
+
+      - name: Generate host-native Sliver assets
+        working-directory: sliver
+        timeout-minutes: 20
+        run: >-
+          go run -buildvcs=false -mod=vendor ./util/cmd/assets
+          2>&1 | tee "../.e2e-results/${{ matrix.id }}/assets.log"
+
+      - name: Build host-native Sliver server
+        working-directory: sliver
+        timeout-minutes: 10
+        env:
+          CGO_ENABLED: "0"
+          GOARCH: ${{ matrix.goarch }}
+          GOOS: ${{ matrix.goos }}
+        run: >-
+          go build -buildvcs=false -mod=vendor -trimpath -tags go_sqlite,server
+          -o "../.e2e-bin/${{ matrix.server_name }}" ./server
+          2>&1 | tee "../.e2e-results/${{ matrix.id }}/server-build.log"
+
+      - name: Run Sliver E2E suite
+        timeout-minutes: 45
+        run: >-
+          uv run --frozen --group test pytest -vv -ra
+          tests/e2e
+          --junitxml="$SLIVER_E2E_RESULTS_ROOT/junit.xml"
+          --log-file="$SLIVER_E2E_RESULTS_ROOT/pytest.log"
+          --log-file-level=DEBUG
+          2>&1 | tee ".e2e-results/${{ matrix.id }}/pytest-console.log"
+
+      - name: Capture E2E environment
+        if: ${{ always() }}
+        run: |
+          mkdir -p ".e2e-results/${{ matrix.id }}"
+          {
+            echo "repository_sha=$GITHUB_SHA"
+            echo "runner_os=$RUNNER_OS"
+            echo "runner_arch=$RUNNER_ARCH"
+            echo "target=${{ matrix.goos }}/${{ matrix.goarch }}"
+            git -C sliver rev-parse HEAD 2>&1 || true
+            git submodule status --recursive 2>&1 || true
+            go version 2>&1 || true
+            uv --version 2>&1 || true
+          } > ".e2e-results/${{ matrix.id }}/environment.log" 2>&1
+
+      - name: Upload E2E results and logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sliver-e2e-${{ matrix.id }}-${{ github.run_attempt }}
+          path: ${{ env.SLIVER_E2E_RESULTS_ROOT }}
+          if-no-files-found: warn
+          retention-days: 14

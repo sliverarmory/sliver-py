@@ -1,130 +1,111 @@
-import os
+#!/usr/bin/env python3
+"""Regenerate Sliver's Python gRPC bindings from the pinned submodule."""
+
+from __future__ import annotations
+
+import shutil
+import tempfile
+from importlib.resources import files
 from pathlib import Path
 
-import pkg_resources
 from grpc_tools import protoc
-from rich.console import Console
+from pydanticgen import generate_models
+from rpcgen import generate_rpc_surface
 
-console = Console(log_time=False, log_path=False)
-ROOT_DIR = Path(__file__).parents[1]
-os.chdir(ROOT_DIR)
+ROOT_DIR = Path(__file__).resolve().parents[1]
+PROTO_DIR = ROOT_DIR / "sliver" / "protobuf"
+OUT_DIR = ROOT_DIR / "src" / "sliver" / "_pb"
 
-IN_DIR = ROOT_DIR / "sliver/protobuf"
-OUT_DIR = ROOT_DIR / "src/sliver/pb"
+PROTO_FILES = (
+    PROTO_DIR / "commonpb" / "common.proto",
+    PROTO_DIR / "sliverpb" / "sliver.proto",
+    PROTO_DIR / "clientpb" / "client.proto",
+    PROTO_DIR / "rpcpb" / "services.proto",
+)
 
-COMMON_PROTO_PATH = IN_DIR / "commonpb/common.proto"
-SLIVER_PROTO_PATH = IN_DIR / "sliverpb/sliver.proto"
-CLIENT_PROTO_PATH = IN_DIR / "clientpb/client.proto"
-GRPC_PROTO_PATH = IN_DIR / "rpcpb/services.proto"
+PACKAGE_IMPORTS = {
+    "from commonpb import common_pb2": "from ..commonpb import common_pb2",
+    "from sliverpb import sliver_pb2": "from ..sliverpb import sliver_pb2",
+    "from clientpb import client_pb2": "from ..clientpb import client_pb2",
+    "import commonpb.common_pb2": "from ..commonpb import common_pb2",
+    "import sliverpb.sliver_pb2": "from ..sliverpb import sliver_pb2",
+    "import clientpb.client_pb2": "from ..clientpb import client_pb2",
+    "commonpb.common_pb2": "common_pb2",
+    "sliverpb.sliver_pb2": "sliver_pb2",
+    "clientpb.client_pb2": "client_pb2",
+}
 
-# There is a more accurate way to do all of this using the ast module but this works for now
-try:
-    # Cleanup old files
-    console.log("[bold green]Removing old generated files...")
-    for file in OUT_DIR.glob("**/*.py"):
-        if file.name.split("_")[0] in ["common", "sliver", "client", "services"]:
-            file.unlink()
-            console.log(f"Removed {file}")
 
-    console.log("[bold green]Generating new files...")
-    proto_pyd = pkg_resources.resource_filename("grpc_tools", "_proto")
+def _run_protoc(output_dir: Path) -> None:
+    grpc_include = Path(str(files("grpc_tools") / "_proto"))
+    common_args = [
+        "grpc_tools.protoc",
+        f"-I{grpc_include}",
+        f"-I{PROTO_DIR}",
+        f"--python_out={output_dir}",
+        f"--mypy_out=readable_stubs:{output_dir}",
+    ]
 
-    # Generate commonpb
-    protoc.main(
-        f"-I{proto_pyd} -I {IN_DIR.relative_to(ROOT_DIR)} --mypy_out=readable_stubs:{OUT_DIR} --python_out={OUT_DIR} {COMMON_PROTO_PATH.relative_to(ROOT_DIR)}".split()
-    )
-    console.log(f"Generated {COMMON_PROTO_PATH.name}")
+    message_protos = [path for path in PROTO_FILES if path.name != "services.proto"]
+    if protoc.main([*common_args, *(str(path) for path in message_protos)]) != 0:
+        raise RuntimeError("protoc failed while generating protobuf messages")
 
-    # Generate sliverpb
-    protoc.main(
-        f"-I{proto_pyd} -I {IN_DIR.relative_to(ROOT_DIR)} --mypy_out=readable_stubs:{OUT_DIR} --python_out={OUT_DIR} {SLIVER_PROTO_PATH.relative_to(ROOT_DIR)}".split()
-    )
-    console.log(f"Generated {SLIVER_PROTO_PATH.name}")
+    service_proto = PROTO_DIR / "rpcpb" / "services.proto"
+    service_args = [
+        *common_args,
+        f"--grpc_python_out={output_dir}",
+        f"--mypy_grpc_out={output_dir}",
+        str(service_proto),
+    ]
+    if protoc.main(service_args) != 0:
+        raise RuntimeError("protoc failed while generating gRPC services")
 
-    # Generate clientpb
-    protoc.main(
-        f"-I{proto_pyd} -I {IN_DIR.relative_to(ROOT_DIR)} --mypy_out=readable_stubs:{OUT_DIR} --python_out={OUT_DIR} {CLIENT_PROTO_PATH.relative_to(ROOT_DIR)}".split()
-    )
-    console.log(f"Generated {CLIENT_PROTO_PATH.name}")
 
-    # Generate rpcpb
-    protoc.main(
-        f"-I{proto_pyd} -I {IN_DIR.relative_to(ROOT_DIR)} --mypy_out=readable_stubs:{OUT_DIR} --mypy_grpc_out={OUT_DIR} --python_out={OUT_DIR} --grpc_python_out={OUT_DIR} {GRPC_PROTO_PATH.relative_to(ROOT_DIR)}".split()
-    )
-    console.log(f"Generated {GRPC_PROTO_PATH.name}")
+def _rewrite_package_imports(output_dir: Path) -> None:
+    for generated_file in output_dir.glob("**/*_pb2*.py*"):
+        content = generated_file.read_text()
+        for absolute, relative in PACKAGE_IMPORTS.items():
+            content = content.replace(absolute, relative)
+        content = "\n".join(line.rstrip() for line in content.splitlines()) + "\n"
+        generated_file.write_text(content)
 
-    # Rewrite imports for py files
-    console.log("[bold green]Rewriting imports for py files...")
-    for file in OUT_DIR.glob("**/*.py"):
-        if file.name.split("_")[0] in ["sliver", "client", "services"]:
-            content = (
-                file.read_text()
-                .replace(
-                    "from commonpb import common_pb2 as commonpb_dot_common__pb2",
-                    "from ..commonpb import common_pb2 as commonpb_dot_common__pb2",
-                )
-                .replace(
-                    "from sliverpb import sliver_pb2 as sliverpb_dot_sliver__pb2",
-                    "from ..sliverpb import sliver_pb2 as sliverpb_dot_sliver__pb2",
-                )
-                .replace(
-                    "from clientpb import client_pb2 as clientpb_dot_client__pb2",
-                    "from ..clientpb import client_pb2 as clientpb_dot_client__pb2",
-                )
-            )
-            # Need to make sure grpc.experimental is imported
-            if file.name == "services_pb2_grpc.py":
-                content = (content
-                    .replace("grpc.Channel", "grpc.aio.Channel")
-                    .replace("import grpc", "import grpc\nimport grpc.experimental")
-                    )  # fmt: skip
 
-            file.write_text(content)
-            console.log(f"Rewrote imports for {file}")
+def _replace_generated_tree(candidate_dir: Path) -> None:
+    generated_names = {path.name for path in candidate_dir.glob("**/*_pb2*.py*")}
+    for old_file in OUT_DIR.glob("**/*_pb2*.py*"):
+        if old_file.name in generated_names or old_file.name.startswith(
+            ("common_pb2", "sliver_pb2", "client_pb2", "services_pb2")
+        ):
+            old_file.unlink()
 
-    # Rewrite imports for pyi files
-    console.log("[bold green]Rewriting imports for pyi files...")
-    for file in OUT_DIR.glob("**/*.pyi"):
-        if file.name.split("_")[0] in ["sliver", "client", "services"]:
-            content = (
-                file.read_text()
-                .replace(
-                    "import commonpb.common_pb2",
-                    "from ..commonpb import common_pb2",
-                )
-                .replace(
-                    "commonpb.common_pb2",
-                    "common_pb2",
-                )
-                .replace(
-                    "import sliverpb.sliver_pb2",
-                    "from ..sliverpb import sliver_pb2",
-                )
-                .replace(
-                    "sliverpb.sliver_pb2",
-                    "sliver_pb2",
-                )
-                .replace(
-                    "import clientpb.client_pb2",
-                    "from ..clientpb import client_pb2",
-                )
-                .replace(
-                    "clientpb.client_pb2",
-                    "client_pb2",
-                )
-            )
+    for package in ("commonpb", "sliverpb", "clientpb", "rpcpb"):
+        source_package = candidate_dir / package
+        target_package = OUT_DIR / package
+        target_package.mkdir(parents=True, exist_ok=True)
+        (target_package / "__init__.py").touch(exist_ok=True)
+        for generated_file in source_package.glob("*_pb2*.py*"):
+            shutil.copy2(generated_file, target_package / generated_file.name)
 
-            # Need to correct type hints. This is a hacky way to do it but it works
-            if file.name == "services_pb2_grpc.pyi":
-                content = content.replace("grpc.Channel", "grpc.aio.Channel")
 
-            if file.name == "sliver_pb2.pyi":
-                content = content.replace(
-                    "from common_pb2 import", "from ..commonpb.common_pb2 import"
-                )
+def main() -> None:
+    missing = [path for path in PROTO_FILES if not path.is_file()]
+    if missing:
+        missing_names = ", ".join(str(path.relative_to(ROOT_DIR)) for path in missing)
+        raise FileNotFoundError(f"missing protobuf sources: {missing_names}")
 
-            file.write_text(content)
-            console.log(f"Rewrote imports for {file}")
-except Exception as e:
-    console.log("[bold red]Failed to generate files!")
-    console.log(e)
+    with tempfile.TemporaryDirectory(prefix="sliver-py-protobuf-") as temp_dir:
+        candidate_dir = Path(temp_dir)
+        _run_protoc(candidate_dir)
+        _rewrite_package_imports(candidate_dir)
+        _replace_generated_tree(candidate_dir)
+
+    if not generate_models():
+        raise RuntimeError("Pydantic model generation failed")
+    if not generate_rpc_surface():
+        raise RuntimeError("Pydantic RPC surface generation failed")
+
+    print(f"Generated private Python protobuf and gRPC bindings in {OUT_DIR}")
+
+
+if __name__ == "__main__":
+    main()

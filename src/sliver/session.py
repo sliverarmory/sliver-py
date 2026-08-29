@@ -23,6 +23,7 @@ import grpc
 from . import models
 from ._protocols import RequestRoutedModel
 from ._rpc import PydanticSliverRPCStub
+from .errors import raise_for_command_error
 from .interactive import BaseInteractiveCommands
 from .models import ProtobufModel
 
@@ -82,7 +83,11 @@ class BaseSession:
                 f"{rpc_name} returned {type(result).__name__}, "
                 f"expected {result_type.__name__}"
             )
-        return result
+        return raise_for_command_error(
+            result,
+            operation=rpc_name,
+            target_id=self.session_id,
+        )
 
     @property
     def session(self) -> models.clientpb.Session:
@@ -190,7 +195,21 @@ class BaseSession:
 class InteractiveSession(BaseSession, BaseInteractiveCommands):
     """Session only commands"""
 
-    async def pivot_listeners(self) -> list[models.sliverpb.PivotListener]:
+    async def getsystem(
+        self,
+        hosting_process: str,
+        config: models.clientpb.ImplantConfig,
+    ) -> models.sliverpb.GetSystem:
+        """Attempt to get SYSTEM, matching Sliver's session-only command."""
+
+        return await self.get_system(hosting_process, config)
+
+    async def extensions_list(self) -> models.sliverpb.ListExtensions:
+        """List loaded extensions, matching Sliver's session-only command."""
+
+        return await self.list_extensions()
+
+    async def pivots(self) -> list[models.sliverpb.PivotListener]:
         """List C2 pivots
 
         :return: Pydantic pivot-listener models
@@ -200,6 +219,11 @@ class InteractiveSession(BaseSession, BaseInteractiveCommands):
             self._request(models.sliverpb.PivotListenersReq()), timeout=self.timeout
         )
         return list(pivots.listeners)
+
+    async def pivot_listeners(self) -> list[models.sliverpb.PivotListener]:
+        """Compatibility alias for :meth:`pivots`."""
+
+        return await self.pivots()
 
     async def start_service(
         self, name: str, description: str, exe: str, hostname: str, arguments: str
@@ -246,6 +270,45 @@ class InteractiveSession(BaseSession, BaseInteractiveCommands):
             )
         )
         return await self._stub.StopService(self._request(svc), timeout=self.timeout)
+
+    async def services_start(
+        self,
+        name: str,
+        *,
+        hostname: str = "localhost",
+    ) -> models.sliverpb.ServiceInfo:
+        """Start an existing service, matching Sliver's ``services start``."""
+
+        request = models.sliverpb.StartServiceByNameReq(
+            service_info=models.sliverpb.ServiceInfoReq(
+                service_name=name,
+                hostname=hostname,
+            )
+        )
+        result = await self._stub.StartServiceByName(
+            self._request(request),
+            timeout=self.timeout,
+        )
+        return raise_for_command_error(
+            result,
+            operation="StartServiceByName",
+            target_id=self.session_id,
+        )
+
+    async def services_stop(
+        self,
+        name: str,
+        *,
+        hostname: str = "localhost",
+    ) -> models.sliverpb.ServiceInfo:
+        """Stop a service, matching Sliver's ``services stop`` command."""
+
+        result = await self.stop_service(name, hostname)
+        return raise_for_command_error(
+            result,
+            operation="StopService",
+            target_id=self.session_id,
+        )
 
     async def remove_service(
         self, name: str, hostname: str

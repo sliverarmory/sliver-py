@@ -4,6 +4,7 @@ from typing import cast, get_args, get_origin, get_type_hints
 
 import grpc
 
+from scripts.rpcgen import _python_method_name
 from sliver import models
 from sliver._pb.rpcpb import services_pb2
 from sliver._pb.rpcpb.services_pb2_grpc import SliverRPCStub as _WireSliverRPCStub
@@ -45,7 +46,9 @@ def test_all_rpc_attributes_have_exact_concrete_model_types() -> None:
     hints = get_type_hints(PydanticSliverRPCStub)
 
     assert len(service.methods) == 193
-    assert set(hints) == set(service.methods_by_name)
+    expected_names = set(service.methods_by_name)
+    expected_names.update(_python_method_name(name) for name in service.methods_by_name)
+    assert set(hints) == expected_names
 
     for method in service.methods:
         annotation = hints[method.name]
@@ -57,6 +60,7 @@ def test_all_rpc_attributes_have_exact_concrete_model_types() -> None:
             models.MODEL_REGISTRY[method.input_type.full_name],
             models.MODEL_REGISTRY[method.output_type.full_name],
         )
+        assert hints[_python_method_name(method.name)] == annotation
 
 
 def test_generated_stub_eagerly_binds_every_typed_rpc_attribute() -> None:
@@ -69,12 +73,15 @@ def test_generated_stub_eagerly_binds_every_typed_rpc_attribute() -> None:
 
     for method in service.methods:
         rpc = getattr(stub, method.name)
+        python_rpc = getattr(stub, _python_method_name(method.name))
         assert isinstance(
             rpc,
             _CALL_TYPES[(method.client_streaming, method.server_streaming)],
         )
         assert rpc.request_type is models.MODEL_REGISTRY[method.input_type.full_name]
         assert rpc.response_type is models.MODEL_REGISTRY[method.output_type.full_name]
+        assert rpc.operation == method.name
+        assert python_rpc is rpc
 
 
 def test_call_classes_only_expose_operations_supported_by_their_rpc_shape() -> None:

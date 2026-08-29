@@ -6,38 +6,59 @@ import argparse
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Literal
 
-from sliver import SliverClient
+from sliver import (
+    GOOS,
+    Client,
+    InteractiveBeacon,
+    InteractiveSession,
+    TargetKind,
+)
 from sliver.models.clientpb import Beacon, Session
 from sliver.models.sliverpb import Execute, Ls, Ping, Pwd
 
-from .common import connected_client, require_success
-
-TargetKind = Literal["session", "beacon"]
-Target = Session | Beacon
+TargetModel = Session | Beacon
 
 
 @dataclass(frozen=True, slots=True)
 class InteractionResult:
     """Results from the commands demonstrated by this example."""
 
-    target: Target
+    target: TargetModel
     ping: Ping
     pwd: Pwd
     listing: Ls
     executed: Execute
 
 
-def _default_command(target_os: str) -> tuple[str, list[str]]:
-    if target_os.lower() == "windows":
+def _default_command(target_os: GOOS | str) -> tuple[str, list[str]]:
+    if GOOS(target_os) is GOOS.WINDOWS:
         return "cmd.exe", ["/c", "whoami"]
     return "/usr/bin/id", []
 
 
-async def run_interaction(
-    client: SliverClient,
+async def _target_id(
+    client: Client,
     kind: TargetKind,
+    target_id: str | None,
+    *,
+    timeout: int,
+) -> str:
+    if target_id is not None:
+        return target_id
+
+    inventory = await client.inventory(timeout=timeout)
+    targets = (
+        inventory.sessions if kind is TargetKind.SESSION else inventory.beacons
+    )
+    if not targets:
+        raise LookupError(f"no active {kind} found")
+    return targets[0].id
+
+
+async def run_interaction(
+    client: Client,
+    kind: TargetKind | str,
     target_id: str | None = None,
     *,
     remote_path: str = ".",
@@ -45,53 +66,39 @@ async def run_interaction(
     arguments: Sequence[str] = (),
     timeout: int = 360,
 ) -> InteractionResult:
-    """Interact with an explicit target, or the first target of ``kind``."""
+    """Select an explicit target, or the first active target of ``kind``."""
 
-    if kind == "session":
-        targets = await client.sessions(timeout=timeout)
-    elif kind == "beacon":
-        targets = await client.beacons(timeout=timeout)
-    else:
-        raise ValueError(f"unsupported target kind: {kind}")
-
-    target = next(
-        (item for item in targets if target_id is None or item.id == target_id),
-        None,
+    selected_kind = TargetKind(kind)
+    selected_id = await _target_id(
+        client,
+        selected_kind,
+        target_id,
+        timeout=timeout,
     )
-    if target is None:
-        detail = f" {target_id!r}" if target_id is not None else ""
-        raise LookupError(f"no active {kind}{detail} found")
 
-    if kind == "session":
-        interaction = await client.interact_session(target.id, timeout=timeout)
+    beacon: InteractiveBeacon | None = None
+    interaction: InteractiveSession | InteractiveBeacon
+    if selected_kind is TargetKind.SESSION:
+        interaction = await client.use_session(selected_id, timeout=timeout)
+        target: TargetModel = interaction.session
     else:
-        interaction = await client.interact_beacon(target.id, timeout=timeout)
-    if interaction is None:
-        raise LookupError(f"{kind} {target.id!r} disappeared before interaction")
+        beacon = await client.use_beacon(selected_id, timeout=timeout)
+        interaction = beacon
+        target = beacon.beacon
 
     try:
-        ping = await asyncio.wait_for(interaction.ping(), timeout=timeout)
-        require_success(ping)
-        pwd = await asyncio.wait_for(interaction.pwd(), timeout=timeout)
-        require_success(pwd)
-        listing = await asyncio.wait_for(interaction.ls(remote_path), timeout=timeout)
-        require_success(listing)
+        ping = await interaction.ping()
+        pwd = await interaction.pwd()
+        listing = await interaction.ls(remote_path)
 
-        command, default_arguments = _default_command(interaction.os)
-        if executable is None:
-            executable = command
-            command_arguments = default_arguments
-        else:
-            command_arguments = list(arguments)
-        executed = await asyncio.wait_for(
-            interaction.execute(executable, command_arguments, output=True),
-            timeout=timeout,
-        )
-        require_success(executed)
+        default_executable, default_arguments = _default_command(interaction.os)
+        command = executable or default_executable
+        command_arguments = list(arguments) if executable else default_arguments
+        executed = await interaction.execute(command, command_arguments, output=True)
         return InteractionResult(target, ping, pwd, listing, executed)
     finally:
-        if kind == "beacon":
-            await interaction.close()
+        if beacon is not None:
+            await beacon.close()
 
 
 def format_interaction(result: InteractionResult) -> str:
@@ -115,7 +122,8 @@ def format_interaction(result: InteractionResult) -> str:
 
 
 async def _run(args: argparse.Namespace) -> None:
-    async with connected_client(args.config) as client:
+    client = Client.from_config_file(args.config)
+    async with client:
         result = await run_interaction(
             client,
             args.kind,
@@ -125,12 +133,12 @@ async def _run(args: argparse.Namespace) -> None:
             arguments=args.argument,
             timeout=args.timeout,
         )
-        print(format_interaction(result))
+    print(format_interaction(result))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("kind", choices=("session", "beacon"))
+    parser.add_argument("kind", type=TargetKind, choices=tuple(TargetKind))
     parser.add_argument("target_id", nargs="?")
     parser.add_argument("--config", help="operator config (or set SLIVER_CONFIG)")
     parser.add_argument("--remote-path", default=".")

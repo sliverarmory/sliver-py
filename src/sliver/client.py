@@ -16,21 +16,69 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from collections.abc import AsyncGenerator
+import os
+from collections.abc import AsyncGenerator, Collection
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import timedelta
 
 import grpc
 
 from . import models
 from ._rpc import PydanticSliverRPCStub
-from .beacon import InteractiveBeacon
-from .config import SliverClientConfig
+from .beacon import InteractiveBeacon, _ClientEventBroker
+from .config import OperatorConfig, SliverClientConfig
+from .domain import GeneratedImplant, ImplantSpec, Inventory
+from .enums import EventType
+from .errors import (
+    CleanupError,
+    NotConnectedError,
+    ResourceNotFoundError,
+    SliverTimeoutError,
+)
 from .session import InteractiveSession
 
 KB = 1024
 MB = 1024 * KB
 GB = 1024 * MB
 TIMEOUT = 60
+_NANOSECONDS_PER_MICROSECOND = 1_000
+_MICROSECONDS_PER_SECOND = 1_000_000
+_SECONDS_PER_DAY = 86_400
+_MAX_INT64 = 9_223_372_036_854_775_807
+
+
+def _normalize_event_types(
+    event_types: EventType | str | Collection[EventType | str] | None,
+) -> list[str] | None:
+    if event_types is None:
+        return None
+    if isinstance(event_types, str):
+        return [str(event_types)]
+    return [str(event_type) for event_type in event_types]
+
+
+def _duration_nanoseconds(value: timedelta | int, *, name: str) -> int:
+    """Convert an ergonomic duration into Sliver's signed nanosecond value."""
+
+    if isinstance(value, bool):
+        raise TypeError(f"{name} must be a timedelta or whole seconds")
+    if isinstance(value, int):
+        value = timedelta(seconds=value)
+    if not isinstance(value, timedelta):
+        raise TypeError(f"{name} must be a timedelta or whole seconds")
+    microseconds = (
+        value.days * _SECONDS_PER_DAY * _MICROSECONDS_PER_SECOND
+        + value.seconds * _MICROSECONDS_PER_SECOND
+        + value.microseconds
+    )
+    nanoseconds = microseconds * _NANOSECONDS_PER_MICROSECOND
+    if nanoseconds < 0:
+        raise ValueError(f"{name} cannot be negative")
+    if nanoseconds > _MAX_INT64:
+        raise ValueError(f"{name} exceeds Sliver's signed 64-bit duration")
+    return nanoseconds
 
 
 class BaseClient:
@@ -46,10 +94,33 @@ class BaseClient:
         self.config = config
         self._channel: grpc.aio.Channel | None = None
         self._stub: PydanticSliverRPCStub | None = None
+        self._event_broker: _ClientEventBroker | None = None
+        self._lifecycle_lock = asyncio.Lock()
         self._log = logging.getLogger(self.__class__.__name__)
 
     def is_connected(self) -> bool:
         return self._channel is not None
+
+    async def __aenter__(self) -> BaseClient:
+        """Connect the client and return it as an owned async resource."""
+
+        await self.connect()
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: object | None,
+    ) -> None:
+        """Close the client regardless of how its context exits."""
+
+        await self.close()
+
+    async def connect(self, timeout: int = TIMEOUT) -> models.clientpb.Version:
+        """Establish a connection to the Sliver server."""
+
+        raise NotImplementedError
 
     async def close(self) -> None:
         """Close the active gRPC channel.
@@ -58,11 +129,27 @@ class BaseClient:
         connected again with :meth:`SliverClient.connect`.
         """
 
+        async with self._lifecycle_lock:
+            await self._close_unlocked()
+
+    async def _close_unlocked(self) -> None:
+        """Close owned resources while the lifecycle lock is held."""
+
+        broker = self._event_broker
+        self._event_broker = None
+        if broker is not None:
+            await broker.close()
+
         channel = self._channel
         self._channel = None
         self._stub = None
         if channel is not None:
             await channel.close()
+
+    async def aclose(self) -> None:
+        """Alias for :meth:`close` following asynchronous resource conventions."""
+
+        await self.close()
 
     @property
     def target(self) -> str:
@@ -91,39 +178,75 @@ class BaseClient:
         ]
 
     @property
-    def pydantic_stub(self) -> PydanticSliverRPCStub:
-        """Return the model-converting stub for unsupported low-level RPCs.
+    def rpc(self) -> PydanticSliverRPCStub:
+        """Typed Pydantic access to every Sliver RPC.
 
         Requests accept descriptor-generated Pydantic models and responses are
         converted back to Pydantic models. The stub is available only while the
         client is connected.
         """
         if self._stub is None:
-            raise RuntimeError("client is not connected")
+            raise NotConnectedError()
         return self._stub
+
+    @property
+    def pydantic_stub(self) -> PydanticSliverRPCStub:
+        """Compatibility alias for :attr:`rpc`."""
+
+        return self.rpc
 
 
 class SliverClient(BaseClient):
     """Asyncio client implementation"""
 
-    beacon_event_types = ["beacon-registered"]
-    session_event_types = ["session-connected", "session-disconnected"]
-    job_event_types = ["job-started", "job-stopped"]
-    canary_event_types = ["canary"]
+    beacon_event_types = frozenset({EventType.BEACON_REGISTERED})
+    session_event_types = frozenset(
+        {EventType.SESSION_CONNECTED, EventType.SESSION_DISCONNECTED}
+    )
+    job_event_types = frozenset({EventType.JOB_STARTED, EventType.JOB_STOPPED})
+    canary_event_types = frozenset({EventType.CANARY})
 
-    async def connect(self) -> models.clientpb.Version:
+    @classmethod
+    def from_config_file(
+        cls,
+        filepath: os.PathLike[str] | str | None = None,
+    ) -> SliverClient:
+        """Construct a client from an explicit, environment, or default config."""
+
+        return cls(SliverClientConfig.from_file(filepath))
+
+    async def __aenter__(self) -> SliverClient:
+        """Connect and preserve the concrete client type in async contexts."""
+
+        await self.connect()
+        return self
+
+    async def connect(self, timeout: int = TIMEOUT) -> models.clientpb.Version:
         """Establish a connection to the Sliver server
 
         :return: Pydantic model containing the server's version information
         :rtype: models.clientpb.Version
         """
-        self._channel = grpc.aio.secure_channel(
-            target=self.target,
-            credentials=self.credentials,
-            options=self.options,
-        )
-        self._stub = PydanticSliverRPCStub(self._channel)
-        return await self.version()
+        async with self._lifecycle_lock:
+            if self.is_connected():
+                try:
+                    return await self.version(timeout=timeout)
+                except BaseException:
+                    await self._close_unlocked()
+                    raise
+
+            self._channel = grpc.aio.secure_channel(
+                target=self.target,
+                credentials=self.credentials,
+                options=self.options,
+            )
+            self._stub = PydanticSliverRPCStub(self._channel)
+            self._event_broker = _ClientEventBroker(self._stub)
+            try:
+                return await self.version(timeout=timeout)
+            except BaseException:
+                await self._close_unlocked()
+                raise
 
     async def interact_session(
         self, session_id: str, timeout: int = TIMEOUT
@@ -139,7 +262,7 @@ class SliverClient(BaseClient):
         session = await self.session_by_id(session_id, timeout)
         if session:
             if self._channel is None:
-                raise RuntimeError("client is not connected")
+                raise NotConnectedError()
             return InteractiveSession(session, self._channel, timeout)
 
     async def interact_beacon(
@@ -156,8 +279,45 @@ class SliverClient(BaseClient):
         beacon = await self.beacon_by_id(beacon_id, timeout)
         if beacon:
             if self._channel is None:
-                raise RuntimeError("client is not connected")
-            return InteractiveBeacon(beacon, self._channel, timeout)
+                raise NotConnectedError()
+            interactive = InteractiveBeacon(beacon, self._channel, timeout)
+            if self._event_broker is None:
+                self._event_broker = _ClientEventBroker(self.pydantic_stub)
+            interactive._attach_event_broker(self._event_broker)
+            return interactive
+
+    async def use_session(
+        self, session_id: str, timeout: int = TIMEOUT
+    ) -> InteractiveSession:
+        """Select a session for interaction, matching ``use sessions``."""
+
+        interaction = await self.interact_session(session_id, timeout=timeout)
+        if interaction is None:
+            raise ResourceNotFoundError("session", session_id)
+        return interaction
+
+    async def use_beacon(
+        self, beacon_id: str, timeout: int = TIMEOUT
+    ) -> InteractiveBeacon:
+        """Select a beacon for interaction, matching ``use beacons``."""
+
+        interaction = await self.interact_beacon(beacon_id, timeout=timeout)
+        if interaction is None:
+            raise ResourceNotFoundError("beacon", beacon_id)
+        return interaction
+
+    async def use(
+        self,
+        target: models.clientpb.Session | models.clientpb.Beacon,
+        timeout: int = TIMEOUT,
+    ) -> InteractiveSession | InteractiveBeacon:
+        """Select a detached session or beacon model for interaction."""
+
+        if isinstance(target, models.clientpb.Session):
+            return await self.use_session(target.id, timeout=timeout)
+        if isinstance(target, models.clientpb.Beacon):
+            return await self.use_beacon(target.id, timeout=timeout)
+        raise TypeError("target must be a Pydantic Session or Beacon model")
 
     async def session_by_id(
         self, session_id: str, timeout: int = TIMEOUT
@@ -191,30 +351,98 @@ class SliverClient(BaseClient):
             if beacon.id == beacon_id:
                 return beacon
 
-    async def events(self) -> AsyncGenerator[models.clientpb.Event, None]:
-        """All events
+    async def find_session(
+        self, session_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Session | None:
+        """Return a session by ID, or ``None`` when it is absent."""
+
+        return await self.session_by_id(session_id, timeout=timeout)
+
+    async def get_session(
+        self, session_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Session:
+        """Return a session by ID or raise :class:`ResourceNotFoundError`."""
+
+        session = await self.find_session(session_id, timeout=timeout)
+        if session is None:
+            raise ResourceNotFoundError("session", session_id)
+        return session
+
+    async def find_beacon(
+        self, beacon_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Beacon | None:
+        """Return a beacon by ID, or ``None`` when it is absent."""
+
+        return await self.beacon_by_id(beacon_id, timeout=timeout)
+
+    async def get_beacon(
+        self, beacon_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Beacon:
+        """Return a beacon by ID or raise :class:`ResourceNotFoundError`."""
+
+        beacon = await self.find_beacon(beacon_id, timeout=timeout)
+        if beacon is None:
+            raise ResourceNotFoundError("beacon", beacon_id)
+        return beacon
+
+    async def events(
+        self,
+        event_types: EventType | str | Collection[EventType | str] | None = None,
+    ) -> AsyncGenerator[models.clientpb.Event, None]:
+        """Iterate all events or only the selected typed event names.
 
         :yield: A stream of events
         :rtype: models.clientpb.Event
         """
-        async for event in self.pydantic_stub.Events(models.commonpb.Empty()):
+        if self._event_broker is None:
+            self._event_broker = _ClientEventBroker(self.rpc)
+        filters = _normalize_event_types(event_types)
+        async for event in self._event_broker.subscribe(filters):
             yield event
 
     async def on(
-        self, event_types: str | list[str]
+        self, event_types: EventType | str | Collection[EventType | str]
     ) -> AsyncGenerator[models.clientpb.Event, None]:
-        """Iterate on a specific event or list of events
+        """Compatibility alias for filtered :meth:`events` iteration.
 
         :param event_types: An event type or list of event types
         :type event_types: Union[str, List[str]]
         :yield: A stream of events of the given type(s)
         :rtype: models.clientpb.Event
         """
-        if isinstance(event_types, str):
-            event_types = [event_types]
-        async for event in self.events():
-            if event.event_type in event_types:
-                yield event
+        async for event in self.events(event_types):
+            yield event
+
+    async def collect_events(
+        self,
+        *event_types: EventType | str,
+        limit: int = 1,
+        timeout: float | None = None,
+    ) -> list[models.clientpb.Event]:
+        """Collect a bounded set of events and close the subscription."""
+
+        if limit < 1:
+            raise ValueError("limit must be at least 1")
+
+        async def collect() -> list[models.clientpb.Event]:
+            collected: list[models.clientpb.Event] = []
+            filters: Collection[EventType | str] | None = event_types or None
+            stream = self.events(filters)
+            try:
+                async for event in stream:
+                    collected.append(event)
+                    if len(collected) == limit:
+                        break
+            finally:
+                await stream.aclose()
+            return collected
+
+        if timeout is None:
+            return await collect()
+        try:
+            return await asyncio.wait_for(collect(), timeout=timeout)
+        except asyncio.TimeoutError as exc:
+            raise SliverTimeoutError("collect events", timeout) from exc
 
     async def version(self, timeout: int = TIMEOUT) -> models.clientpb.Version:
         """Get server version information
@@ -240,6 +468,24 @@ class SliverClient(BaseClient):
             models.commonpb.Empty(), timeout=timeout
         )
         return list(operators.operators)
+
+    async def inventory(self, timeout: int = TIMEOUT) -> Inventory:
+        """Collect the common Sliver server resources concurrently."""
+
+        version, sessions, beacons, jobs, operators = await asyncio.gather(
+            self.version(timeout=timeout),
+            self.sessions(timeout=timeout),
+            self.beacons(timeout=timeout),
+            self.jobs(timeout=timeout),
+            self.operators(timeout=timeout),
+        )
+        return Inventory(
+            version=version,
+            sessions=sessions,
+            beacons=beacons,
+            jobs=jobs,
+            operators=operators,
+        )
 
     async def sessions(self, timeout: int = TIMEOUT) -> list[models.clientpb.Session]:
         """Get a list of active sessions
@@ -318,10 +564,27 @@ class SliverClient(BaseClient):
         rename_req = models.clientpb.RenameReq(beacon_id=beacon_id, name=name)
         await self.pydantic_stub.Rename(rename_req, timeout=timeout)
 
-    async def kill_beacon(self, beacon_id: str, timeout: int = TIMEOUT) -> None:
-        """Remove a beacon record from the server.
+    async def kill_beacon(
+        self,
+        beacon_id: str,
+        force: bool = False,
+        timeout: int = TIMEOUT,
+    ) -> None:
+        """Queue a command that terminates a beacon implant process.
 
-        This does not terminate a running beacon process.
+        :param beacon_id: Beacon ID to kill
+        :type beacon_id: str
+        :param force: Force kill the beacon, defaults to False
+        :type force: bool, optional
+        :param timeout: gRPC timeout, defaults to 60 seconds
+        :type timeout: int, optional
+        """
+        request = models.commonpb.Request(beacon_id=beacon_id, timeout=timeout)
+        kill_req = models.sliverpb.KillReq(force=force, request=request)
+        await self.pydantic_stub.Kill(kill_req, timeout=timeout)
+
+    async def rm_beacon(self, beacon_id: str, timeout: int = TIMEOUT) -> None:
+        """Remove a beacon record from the server without killing its process.
 
         :param beacon_id: Beacon ID to remove
         :type beacon_id: str
@@ -330,6 +593,11 @@ class SliverClient(BaseClient):
         """
         beacon_rm = models.clientpb.Beacon(id=beacon_id)
         await self.pydantic_stub.RmBeacon(beacon_rm, timeout=timeout)
+
+    async def beacons_rm(self, beacon_id: str, timeout: int = TIMEOUT) -> None:
+        """Remove a beacon record, matching Sliver's ``beacons rm`` path."""
+
+        await self.rm_beacon(beacon_id, timeout=timeout)
 
     async def beacon_tasks(
         self, beacon_id: str, timeout: int = TIMEOUT
@@ -362,6 +630,44 @@ class SliverClient(BaseClient):
         task_req = models.clientpb.BeaconTask(id=task_id)
         task = await self.pydantic_stub.GetBeaconTaskContent(task_req, timeout=timeout)
         return task
+
+    async def tasks(
+        self, beacon_id: str, timeout: int = TIMEOUT
+    ) -> list[models.clientpb.BeaconTask]:
+        """List a beacon's tasks, matching Sliver's ``tasks`` command."""
+
+        return await self.beacon_tasks(beacon_id, timeout=timeout)
+
+    async def tasks_fetch(
+        self, task_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.BeaconTask:
+        """Fetch stored task content, matching Sliver's ``tasks fetch``."""
+
+        return await self.fetch_task(task_id, timeout=timeout)
+
+    async def fetch_task(
+        self, task_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.BeaconTask:
+        """Fetch stored task content, matching ``tasks fetch``."""
+
+        return await self.beacon_task_content(task_id, timeout=timeout)
+
+    async def cancel_task(
+        self, task_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.BeaconTask:
+        """Cancel a pending beacon task, matching ``tasks cancel``."""
+
+        return await self.rpc.cancel_beacon_task(
+            models.clientpb.BeaconTask(id=task_id),
+            timeout=timeout,
+        )
+
+    async def tasks_cancel(
+        self, task_id: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.BeaconTask:
+        """Cancel a pending task, matching Sliver's ``tasks cancel``."""
+
+        return await self.cancel_task(task_id, timeout=timeout)
 
     async def jobs(self, timeout: int = TIMEOUT) -> list[models.clientpb.Job]:
         """Get a list of active jobs
@@ -408,6 +714,23 @@ class SliverClient(BaseClient):
             if job.port == job_port:
                 return job
 
+    async def find_job(
+        self, job_id: int, timeout: int = TIMEOUT
+    ) -> models.clientpb.Job | None:
+        """Return a job by ID, or ``None`` when it is absent."""
+
+        return await self.job_by_id(job_id, timeout=timeout)
+
+    async def get_job(
+        self, job_id: int, timeout: int = TIMEOUT
+    ) -> models.clientpb.Job:
+        """Return a job by ID or raise :class:`ResourceNotFoundError`."""
+
+        job = await self.find_job(job_id, timeout=timeout)
+        if job is None:
+            raise ResourceNotFoundError("job", job_id)
+        return job
+
     async def kill_job(
         self, job_id: int, timeout: int = TIMEOUT
     ) -> models.clientpb.KillJob:
@@ -422,6 +745,145 @@ class SliverClient(BaseClient):
         """
         kill_req = models.clientpb.KillJobReq(id=job_id)
         return await self.pydantic_stub.KillJob(kill_req, timeout=timeout)
+
+    async def mtls(
+        self,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 8888,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ListenerJob:
+        """Start an mTLS listener, matching Sliver's ``mtls`` command."""
+
+        return await self.start_mtls_listener(host=host, port=port, timeout=timeout)
+
+    async def wg(
+        self,
+        *,
+        tun_ip: str | None = None,
+        host: str = "0.0.0.0",
+        port: int = 53,
+        n_port: int = 8888,
+        key_port: int = 1337,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ListenerJob:
+        """Start a WireGuard listener, matching Sliver's ``wg`` command."""
+
+        return await self.start_wg_listener(
+            tun_ip=tun_ip,
+            host=host,
+            port=port,
+            n_port=n_port,
+            key_port=key_port,
+            timeout=timeout,
+        )
+
+    async def dns(
+        self,
+        domains: list[str],
+        *,
+        host: str = "0.0.0.0",
+        port: int = 53,
+        canaries: bool = True,
+        enforce_otp: bool = True,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ListenerJob:
+        """Start a DNS listener, matching Sliver's ``dns`` command."""
+
+        return await self.start_dns_listener(
+            domains,
+            host=host,
+            port=port,
+            canaries=canaries,
+            enforce_otp=enforce_otp,
+            timeout=timeout,
+        )
+
+    async def http(
+        self,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 80,
+        website: str = "",
+        domain: str = "",
+        enforce_otp: bool = True,
+        long_poll_timeout: timedelta | int = timedelta(seconds=1),
+        long_poll_jitter: timedelta | int = timedelta(seconds=2),
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ListenerJob:
+        """Start an HTTP listener, matching Sliver's ``http`` command."""
+
+        return await self.start_http_listener(
+            host=host,
+            port=port,
+            website=website,
+            domain=domain,
+            enforce_otp=enforce_otp,
+            long_poll_timeout=long_poll_timeout,
+            long_poll_jitter=long_poll_jitter,
+            timeout=timeout,
+        )
+
+    async def https(
+        self,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 443,
+        website: str = "",
+        domain: str = "",
+        cert: bytes = b"",
+        key: bytes = b"",
+        acme: bool = False,
+        enforce_otp: bool = True,
+        randomize_jarm: bool = True,
+        long_poll_timeout: timedelta | int = timedelta(seconds=1),
+        long_poll_jitter: timedelta | int = timedelta(seconds=2),
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ListenerJob:
+        """Start an HTTPS listener, matching Sliver's ``https`` command."""
+
+        return await self.start_https_listener(
+            host=host,
+            port=port,
+            website=website,
+            domain=domain,
+            cert=cert,
+            key=key,
+            acme=acme,
+            enforce_otp=enforce_otp,
+            randomize_jarm=randomize_jarm,
+            long_poll_timeout=long_poll_timeout,
+            long_poll_jitter=long_poll_jitter,
+            timeout=timeout,
+        )
+
+    def temporary_mtls(
+        self,
+        *,
+        host: str = "0.0.0.0",
+        port: int = 8888,
+        timeout: int = TIMEOUT,
+    ) -> AbstractAsyncContextManager[models.clientpb.ListenerJob]:
+        """Own an mTLS listener for the duration of an async context."""
+
+        @asynccontextmanager
+        async def manage() -> AsyncGenerator[models.clientpb.ListenerJob, None]:
+            listener = await self.mtls(host=host, port=port, timeout=timeout)
+            try:
+                yield listener
+            finally:
+                try:
+                    stopped = await self.kill_job(listener.job_id, timeout=timeout)
+                    if not stopped.success or stopped.id != listener.job_id:
+                        raise RuntimeError(
+                            f"Sliver did not stop listener job {listener.job_id}"
+                        )
+                except Exception as failure:
+                    raise CleanupError(
+                        "temporary mTLS listener", [failure]
+                    ) from failure
+
+        return manage()
 
     async def start_mtls_listener(
         self,
@@ -470,7 +932,7 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.ListenerJob
         """
         if tun_ip is None:
-            uniq_ip = await self.generate_wg_ip()
+            uniq_ip = await self.generate_wg_ip(timeout=timeout)
             tun_ip = uniq_ip.ip
 
         wg_req = models.clientpb.WGListenerReq(
@@ -508,11 +970,19 @@ class SliverClient(BaseClient):
         :return: Pydantic listener-job model
         :rtype: models.clientpb.ListenerJob
         """
-        # Ensure domains always have a trailing dot
-        domains = list(map(lambda d: d + "." if d[-1] != "." else d, domains))
+        if not domains:
+            raise ValueError("domains must contain at least one DNS name")
+        normalized_domains: list[str] = []
+        for domain in domains:
+            normalized = domain.strip()
+            if not normalized:
+                raise ValueError("domains cannot contain an empty DNS name")
+            normalized_domains.append(
+                normalized if normalized.endswith(".") else f"{normalized}."
+            )
 
         dns_req = models.clientpb.DNSListenerReq(
-            domains=domains,
+            domains=normalized_domains,
             canaries=canaries,
             host=host,
             port=port,
@@ -526,6 +996,9 @@ class SliverClient(BaseClient):
         port: int = 80,
         website: str = "",
         domain: str = "",
+        enforce_otp: bool = True,
+        long_poll_timeout: timedelta | int = timedelta(seconds=1),
+        long_poll_jitter: timedelta | int = timedelta(seconds=2),
         timeout: int = TIMEOUT,
     ) -> models.clientpb.ListenerJob:
         """Start an HTTP C2 listener
@@ -550,6 +1023,13 @@ class SliverClient(BaseClient):
             port=port,
             secure=False,
             website=website,
+            enforce_otp=enforce_otp,
+            long_poll_timeout=_duration_nanoseconds(
+                long_poll_timeout, name="long_poll_timeout"
+            ),
+            long_poll_jitter=_duration_nanoseconds(
+                long_poll_jitter, name="long_poll_jitter"
+            ),
         )
         return await self.pydantic_stub.StartHTTPListener(http_req, timeout=timeout)
 
@@ -564,8 +1044,8 @@ class SliverClient(BaseClient):
         acme: bool = False,
         enforce_otp: bool = True,
         randomize_jarm: bool = True,
-        long_poll_timeout: int = 1,
-        long_poll_jitter: int = 2,
+        long_poll_timeout: timedelta | int = timedelta(seconds=1),
+        long_poll_jitter: timedelta | int = timedelta(seconds=2),
         timeout: int = TIMEOUT,
     ) -> models.clientpb.ListenerJob:
         """Start an HTTPS C2 listener
@@ -607,8 +1087,12 @@ class SliverClient(BaseClient):
             key=key,
             acme=acme,
             enforce_otp=enforce_otp,
-            long_poll_timeout=long_poll_timeout,
-            long_poll_jitter=long_poll_jitter,
+            long_poll_timeout=_duration_nanoseconds(
+                long_poll_timeout, name="long_poll_timeout"
+            ),
+            long_poll_jitter=_duration_nanoseconds(
+                long_poll_jitter, name="long_poll_jitter"
+            ),
             randomize_jarm=randomize_jarm,
         )
         return await self.pydantic_stub.StartHTTPSListener(https_req, timeout=timeout)
@@ -647,6 +1131,22 @@ class SliverClient(BaseClient):
             stage_req, timeout=timeout
         )
 
+    async def stage_listener(
+        self,
+        host: str,
+        port: int,
+        data: bytes,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.StagerListener:
+        """Start a TCP stage listener, matching Sliver's ``stage-listener``."""
+
+        return await self.start_tcp_stager_listener(
+            host,
+            port,
+            data,
+            timeout=timeout,
+        )
+
     async def generate_implant(
         self, config: models.clientpb.ImplantConfig, timeout: int = 360
     ) -> models.clientpb.Generate:
@@ -661,6 +1161,24 @@ class SliverClient(BaseClient):
         """
         req = models.clientpb.GenerateReq(config=config)
         return await self.pydantic_stub.Generate(req, timeout=timeout)
+
+    async def generate(
+        self,
+        spec: ImplantSpec,
+        *,
+        name: str = "",
+        timeout: int = 360,
+        base_config: models.clientpb.ImplantConfig | None = None,
+    ) -> GeneratedImplant:
+        """Generate an implant from a concise, validated specification."""
+
+        if not isinstance(spec, ImplantSpec):
+            raise TypeError("spec must be an ImplantSpec Pydantic model")
+        generated = await self.rpc.generate(
+            spec.to_generate_request(name=name, base=base_config),
+            timeout=timeout,
+        )
+        return GeneratedImplant.from_generate(generated)
 
     async def generate_stage(
         self,
@@ -685,6 +1203,16 @@ class SliverClient(BaseClient):
         """
         return await self.pydantic_stub.GenerateStage(request, timeout=timeout)
 
+    async def profiles_stage(
+        self,
+        request: models.clientpb.GenerateStageReq,
+        timeout: int = 360,
+    ) -> GeneratedImplant:
+        """Generate a stage, matching Sliver's ``profiles stage`` command."""
+
+        generated = await self.generate_stage(request, timeout=timeout)
+        return GeneratedImplant.from_generate(generated)
+
     async def regenerate_implant(
         self, implant_name: str, timeout: int = TIMEOUT
     ) -> models.clientpb.Generate:
@@ -699,6 +1227,14 @@ class SliverClient(BaseClient):
         """
         regenerate = models.clientpb.RegenerateReq(implant_name=implant_name)
         return await self.pydantic_stub.Regenerate(regenerate, timeout=timeout)
+
+    async def regenerate(
+        self, implant_name: str, timeout: int = TIMEOUT
+    ) -> GeneratedImplant:
+        """Regenerate a stored implant, matching Sliver's ``regenerate`` command."""
+
+        generated = await self.regenerate_implant(implant_name, timeout=timeout)
+        return GeneratedImplant.from_generate(generated)
 
     async def implant_builds(
         self, timeout: int = TIMEOUT
@@ -715,6 +1251,13 @@ class SliverClient(BaseClient):
         )
         return dict(builds.configs)
 
+    async def implants(
+        self, timeout: int = TIMEOUT
+    ) -> dict[str, models.clientpb.ImplantConfig]:
+        """List stored builds, matching Sliver's ``implants`` command."""
+
+        return await self.implant_builds(timeout=timeout)
+
     async def delete_implant_build(
         self, implant_name: str, timeout: int = TIMEOUT
     ) -> None:
@@ -727,6 +1270,20 @@ class SliverClient(BaseClient):
         """
         delete = models.clientpb.DeleteReq(name=implant_name)
         await self.pydantic_stub.DeleteImplantBuild(delete, timeout=timeout)
+
+    async def rm_implant(
+        self, implant_name: str, timeout: int = TIMEOUT
+    ) -> None:
+        """Remove a stored build, matching Sliver's ``implants rm`` command."""
+
+        await self.delete_implant_build(implant_name, timeout=timeout)
+
+    async def implants_rm(
+        self, implant_name: str, timeout: int = TIMEOUT
+    ) -> None:
+        """Remove a stored build, matching Sliver's ``implants rm`` path."""
+
+        await self.rm_implant(implant_name, timeout=timeout)
 
     async def canaries(self, timeout: int = TIMEOUT) -> list[models.clientpb.DNSCanary]:
         """Get canaries generated during implant builds and their metadata.
@@ -754,6 +1311,13 @@ class SliverClient(BaseClient):
         return await self.pydantic_stub.GenerateWGClientConfig(
             models.commonpb.Empty(), timeout=timeout
         )
+
+    async def wg_config(
+        self, timeout: int = TIMEOUT
+    ) -> models.clientpb.WGClientConfig:
+        """Generate a WireGuard client config, matching ``wg-config``."""
+
+        return await self.generate_wg_client_config(timeout=timeout)
 
     async def generate_wg_ip(
         self, timeout: int = TIMEOUT
@@ -784,6 +1348,43 @@ class SliverClient(BaseClient):
         )
         return list(profiles.profiles)
 
+    async def profiles(
+        self, timeout: int = TIMEOUT
+    ) -> list[models.clientpb.ImplantProfile]:
+        """List implant profiles, matching Sliver's ``profiles`` command."""
+
+        return await self.implant_profiles(timeout=timeout)
+
+    async def profiles_generate(
+        self,
+        profile_name: str,
+        *,
+        name: str = "",
+        timeout: int = 360,
+    ) -> GeneratedImplant:
+        """Generate an implant, matching Sliver's ``profiles generate`` command."""
+
+        profile = next(
+            (
+                profile
+                for profile in await self.profiles(timeout=timeout)
+                if profile.name == profile_name
+            ),
+            None,
+        )
+        if profile is None:
+            raise ResourceNotFoundError("implant profile", profile_name)
+        if profile.config is None:
+            raise ValueError(f"implant profile {profile_name!r} has no configuration")
+        generated = await self.rpc.generate(
+            models.clientpb.GenerateReq(
+                config=profile.config.model_copy(deep=True),
+                name=name,
+            ),
+            timeout=timeout,
+        )
+        return GeneratedImplant.from_generate(generated)
+
     async def delete_implant_profile(
         self, profile_name: str, timeout: int = TIMEOUT
     ) -> None:
@@ -796,6 +1397,20 @@ class SliverClient(BaseClient):
         """
         delete = models.clientpb.DeleteReq(name=profile_name)
         await self.pydantic_stub.DeleteImplantProfile(delete, timeout=timeout)
+
+    async def rm_profile(
+        self, profile_name: str, timeout: int = TIMEOUT
+    ) -> None:
+        """Remove an implant profile, matching ``profiles rm``."""
+
+        await self.delete_implant_profile(profile_name, timeout=timeout)
+
+    async def profiles_rm(
+        self, profile_name: str, timeout: int = TIMEOUT
+    ) -> None:
+        """Remove a profile, matching Sliver's ``profiles rm`` path."""
+
+        await self.rm_profile(profile_name, timeout=timeout)
 
     async def save_implant_profile(
         self,
@@ -812,6 +1427,24 @@ class SliverClient(BaseClient):
         :rtype: models.clientpb.ImplantProfile
         """
         return await self.pydantic_stub.SaveImplantProfile(profile, timeout=timeout)
+
+    async def new_profile(
+        self,
+        profile: models.clientpb.ImplantProfile,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ImplantProfile:
+        """Save an implant profile, matching ``profiles new``."""
+
+        return await self.save_implant_profile(profile, timeout=timeout)
+
+    async def profiles_new(
+        self,
+        profile: models.clientpb.ImplantProfile,
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ImplantProfile:
+        """Save a profile, matching Sliver's ``profiles new`` path."""
+
+        return await self.new_profile(profile, timeout=timeout)
 
     async def shellcode(
         self,
@@ -838,6 +1471,23 @@ class SliverClient(BaseClient):
         )
         return await self.pydantic_stub.ShellcodeRDI(shell_req, timeout=timeout)
 
+    async def shellcode_rdi(
+        self,
+        data: bytes,
+        function_name: str,
+        *,
+        arguments: str = "",
+        timeout: int = TIMEOUT,
+    ) -> models.clientpb.ShellcodeRDI:
+        """Generate shellcode from a DLL without colliding with implant commands."""
+
+        return await self.shellcode(
+            data,
+            function_name,
+            arguments=arguments,
+            timeout=timeout,
+        )
+
     async def websites(self, timeout: int = TIMEOUT) -> list[models.clientpb.Website]:
         """Get a list of websites
 
@@ -854,11 +1504,25 @@ class SliverClient(BaseClient):
     async def website(
         self, name: str, timeout: int = TIMEOUT
     ) -> models.clientpb.Website:
-        """Get a website and its content by name."""
+        """Compatibility spelling for :meth:`show_website`."""
 
         return await self.pydantic_stub.Website(
             models.clientpb.Website(name=name), timeout=timeout
         )
+
+    async def show_website(
+        self, name: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Website:
+        """Show a website and its content, matching ``websites show``."""
+
+        return await self.website(name, timeout=timeout)
+
+    async def websites_show(
+        self, name: str, timeout: int = TIMEOUT
+    ) -> models.clientpb.Website:
+        """Show a website, matching Sliver's ``websites show`` path."""
+
+        return await self.show_website(name, timeout=timeout)
 
     async def update_website(
         self,
@@ -929,7 +1593,7 @@ class SliverClient(BaseClient):
         )
 
     async def remove_website(self, name: str, timeout: int = TIMEOUT) -> None:
-        """Remove an entire website and its content
+        """Compatibility spelling for :meth:`rm_website`.
 
         :param name: The name of the website to remove
         :type name: str
@@ -938,6 +1602,16 @@ class SliverClient(BaseClient):
         """
         website = models.clientpb.Website(name=name)
         await self.pydantic_stub.WebsiteRemove(website, timeout=timeout)
+
+    async def rm_website(self, name: str, timeout: int = TIMEOUT) -> None:
+        """Remove a website and its content, matching ``websites rm``."""
+
+        await self.remove_website(name, timeout=timeout)
+
+    async def websites_rm(self, name: str, timeout: int = TIMEOUT) -> None:
+        """Remove a website, matching Sliver's ``websites rm`` path."""
+
+        await self.rm_website(name, timeout=timeout)
 
     async def add_website_content(
         self,
@@ -1012,7 +1686,7 @@ class SliverClient(BaseClient):
     async def remove_website_content(
         self, name: str, paths: list[str], timeout: int = TIMEOUT
     ) -> models.clientpb.Website:
-        """Remove content from a specific website
+        """Compatibility spelling for :meth:`rm_website_content`.
 
         :param name: The name of the website from which to remove the content
         :type name: str
@@ -1025,3 +1699,36 @@ class SliverClient(BaseClient):
         """
         web = models.clientpb.WebsiteRemoveContent(name=name, paths=paths)
         return await self.pydantic_stub.WebsiteRemoveContent(web, timeout=timeout)
+
+    async def rm_website_content(
+        self, name: str, paths: list[str], timeout: int = TIMEOUT
+    ) -> models.clientpb.Website:
+        """Remove content paths, matching ``websites rm-content``."""
+
+        return await self.remove_website_content(name, paths, timeout=timeout)
+
+    async def websites_rm_content(
+        self, name: str, paths: list[str], timeout: int = TIMEOUT
+    ) -> models.clientpb.Website:
+        """Remove paths, matching Sliver's ``websites rm-content`` path."""
+
+        return await self.rm_website_content(name, paths, timeout=timeout)
+
+
+class Client(SliverClient):
+    """Preferred concise name for the asynchronous Sliver client."""
+
+    @classmethod
+    def from_config_file(
+        cls,
+        filepath: os.PathLike[str] | str | None = None,
+    ) -> Client:
+        """Construct a client from an explicit, environment, or default config."""
+
+        return cls(OperatorConfig.from_file(filepath))
+
+    async def __aenter__(self) -> Client:
+        """Connect and preserve :class:`Client` in async contexts."""
+
+        await self.connect()
+        return self

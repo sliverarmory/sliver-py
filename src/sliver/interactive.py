@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from . import models
 from ._protocols import InteractiveObject
+from .enums import GOOS, LogonType, RegistryHive
 
 
 class BaseInteractiveCommands:
@@ -202,10 +203,10 @@ class BaseInteractiveCommands:
             "Upload", self._request(upload), models.sliverpb.Upload
         )
 
-    async def process_dump(
+    async def procdump(
         self: InteractiveObject, pid: int
     ) -> models.sliverpb.ProcessDump:
-        """Dump a remote process' memory
+        """Dump a remote process' memory.
 
         :param pid: PID of the process to dump
         :type pid: int
@@ -217,10 +218,25 @@ class BaseInteractiveCommands:
             "ProcessDump", self._request(procdump), models.sliverpb.ProcessDump
         )
 
-    async def run_as(
-        self: InteractiveObject, username: str, process_name: str, args: str
+    async def process_dump(
+        self: BaseInteractiveCommands, pid: int
+    ) -> models.sliverpb.ProcessDump:
+        """Compatibility alias for :meth:`procdump`."""
+
+        return await self.procdump(pid)
+
+    async def runas(
+        self: InteractiveObject,
+        username: str,
+        process_name: str,
+        args: str = "",
+        *,
+        domain: str = "",
+        password: str = "",
+        show_window: bool = False,
+        net_only: bool = False,
     ) -> models.sliverpb.RunAs:
-        """Run a command as another user on the remote system
+        """Run a command as another user, matching Sliver's ``runas`` command.
 
         :param username: User to run process as
         :type username: str
@@ -228,14 +244,46 @@ class BaseInteractiveCommands:
         :type process_name: str
         :param args: Arguments to process
         :type args: str
+        :param domain: Domain of the user
+        :type domain: str
+        :param password: Password of the user
+        :type password: str
+        :param show_window: Show the new process window
+        :type show_window: bool
+        :param net_only: Use the credentials for network access only
+        :type net_only: bool
         :return: Pydantic run-as result model
         :rtype: models.sliverpb.RunAs
         """
         run_as = models.sliverpb.RunAsReq(
-            username=username, process_name=process_name, args=args
+            username=username,
+            process_name=process_name,
+            args=args,
+            domain=domain,
+            password=password,
+            hide_window=not show_window,
+            net_only=net_only,
         )
         return await self._execute(
             "RunAs", self._request(run_as), models.sliverpb.RunAs
+        )
+
+    async def run_as(
+        self: BaseInteractiveCommands,
+        username: str,
+        process_name: str,
+        args: str,
+    ) -> models.sliverpb.RunAs:
+        """Compatibility alias for :meth:`runas`."""
+
+        # The historical method omitted HideWindow, whose wire default is
+        # false. Preserve that behavior while the command-shaped ``runas``
+        # method follows Sliver's hidden-window default.
+        return await self.runas(
+            username,
+            process_name,
+            args,
+            show_window=True,
         )
 
     async def impersonate(
@@ -253,7 +301,7 @@ class BaseInteractiveCommands:
             "Impersonate", self._request(impersonate), models.sliverpb.Impersonate
         )
 
-    async def revert_to_self(self: InteractiveObject) -> models.sliverpb.RevToSelf:
+    async def rev2self(self: InteractiveObject) -> models.sliverpb.RevToSelf:
         """Revert to self from impersonation context
 
         :return: Pydantic revert-result model
@@ -264,6 +312,13 @@ class BaseInteractiveCommands:
             self._request(models.sliverpb.RevToSelfReq()),
             models.sliverpb.RevToSelf,
         )
+
+    async def revert_to_self(
+        self: BaseInteractiveCommands,
+    ) -> models.sliverpb.RevToSelf:
+        """Compatibility alias for :meth:`rev2self`."""
+
+        return await self.rev2self()
 
     async def get_system(
         self: InteractiveObject,
@@ -344,7 +399,7 @@ class BaseInteractiveCommands:
         )
         return await self._execute("Msf", self._request(msf), models.sliverpb.Task)
 
-    async def msf_remote(
+    async def msf_inject(
         self: InteractiveObject,
         payload: str,
         lhost: str,
@@ -380,6 +435,26 @@ class BaseInteractiveCommands:
         )
         return await self._execute(
             "MsfRemote", self._request(msf), models.sliverpb.Task
+        )
+
+    async def msf_remote(
+        self: BaseInteractiveCommands,
+        payload: str,
+        lhost: str,
+        lport: int,
+        encoder: str,
+        iterations: int,
+        pid: int,
+    ) -> models.sliverpb.Task:
+        """Compatibility alias for :meth:`msf_inject`."""
+
+        return await self.msf_inject(
+            payload,
+            lhost,
+            lport,
+            encoder,
+            iterations,
+            pid,
         )
 
     async def execute_assembly(
@@ -505,15 +580,18 @@ class BaseInteractiveCommands:
             "Sideload", self._request(side), models.sliverpb.Sideload
         )
 
-    async def spawn_dll(
+    async def spawndll(
         self: InteractiveObject,
         data: bytes,
-        process_name: str,
-        arguments: list[str],
-        entry_point: str,
-        kill: bool,
+        *,
+        process_name: str = r"c:\windows\system32\notepad.exe",
+        arguments: list[str] | None = None,
+        entry_point: str = "ReflectiveLoader",
+        keep_alive: bool = False,
+        parent_pid: int = 0,
+        process_arguments: list[str] | None = None,
     ) -> models.sliverpb.SpawnDll:
-        """Spawn a DLL on the remote system from memory (Windows only)
+        """Spawn a DLL from memory, matching Sliver's ``spawndll`` command.
 
         :param data: DLL raw bytes
         :type data: bytes
@@ -523,20 +601,44 @@ class BaseInteractiveCommands:
         :type arguments: list[str]
         :param entry_point: Entrypoint of the DLL
         :type entry_point: str
-        :param kill: Kill normal execution of the remote process when spawing the DLL
-        :type kill: bool
+        :param keep_alive: Keep the hosting process alive after execution
+        :type keep_alive: bool
+        :param parent_pid: Optional parent process ID for the host process
+        :type parent_pid: int
+        :param process_arguments: Arguments passed to the hosting process
+        :type process_arguments: list[str]
         :return: Pydantic DLL-execution result model
         :rtype: models.sliverpb.SpawnDll
         """
         spawn = models.sliverpb.InvokeSpawnDllReq(
             data=data,
             process_name=process_name,
-            args=arguments,
+            args=arguments or [],
             entry_point=entry_point,
-            kill=kill,
+            kill=not keep_alive,
+            p_pid=parent_pid,
+            process_args=process_arguments or [],
         )
         return await self._execute(
             "SpawnDll", self._request(spawn), models.sliverpb.SpawnDll
+        )
+
+    async def spawn_dll(
+        self: BaseInteractiveCommands,
+        data: bytes,
+        process_name: str,
+        arguments: list[str],
+        entry_point: str,
+        kill: bool,
+    ) -> models.sliverpb.SpawnDll:
+        """Compatibility alias for :meth:`spawndll`."""
+
+        return await self.spawndll(
+            data,
+            process_name=process_name,
+            arguments=arguments,
+            entry_point=entry_point,
+            keep_alive=not kill,
         )
 
     async def list_extensions(
@@ -558,7 +660,7 @@ class BaseInteractiveCommands:
         self: InteractiveObject,
         name: str,
         data: bytes,
-        goos: str,
+        goos: GOOS | str,
         init: str,
     ) -> models.sliverpb.RegisterExtension:
         """Call an extension
@@ -568,7 +670,7 @@ class BaseInteractiveCommands:
         :param data: Extension binary data
         :type data: bytes
         :param goos: OS
-        :type goos: str
+        :type goos: GOOS | str
         :param init: Init entrypoint to run
         :type init: str
         :return: Pydantic extension-registration result model
@@ -577,7 +679,7 @@ class BaseInteractiveCommands:
         regext = models.sliverpb.RegisterExtensionReq(
             name=name,
             data=data,
-            os=goos,
+            os=str(goos),
             init=init,
         )
         return await self._execute(
@@ -627,7 +729,12 @@ class BaseInteractiveCommands:
         )
 
     async def make_token(
-        self: InteractiveObject, username: str, password: str, domain: str
+        self: InteractiveObject,
+        username: str,
+        password: str,
+        domain: str = ".",
+        *,
+        logon_type: LogonType = LogonType.NEW_CREDENTIALS,
     ) -> models.sliverpb.MakeToken:
         """Make a Windows user token from a valid login (Windows only)
 
@@ -637,17 +744,22 @@ class BaseInteractiveCommands:
         :type password: str
         :param domain: Domain
         :type domain: str
+        :param logon_type: Windows logon type, defaults to new credentials
+        :type logon_type: LogonType
         :return: Pydantic token-creation result model
         :rtype: models.sliverpb.MakeToken
         """
         make = models.sliverpb.MakeTokenReq(
-            username=username, password=password, domain=domain
+            username=username,
+            password=password,
+            domain=domain,
+            logon_type=int(logon_type),
         )
         return await self._execute(
             "MakeToken", self._request(make), models.sliverpb.MakeToken
         )
 
-    async def get_env(self: InteractiveObject, name: str) -> models.sliverpb.EnvInfo:
+    async def env(self: InteractiveObject, name: str = "") -> models.sliverpb.EnvInfo:
         """Get an environment variable
 
         :param name: Name of the variable
@@ -659,6 +771,13 @@ class BaseInteractiveCommands:
         return await self._execute(
             "GetEnv", self._request(env), models.sliverpb.EnvInfo
         )
+
+    async def get_env(
+        self: BaseInteractiveCommands, name: str
+    ) -> models.sliverpb.EnvInfo:
+        """Compatibility alias for :meth:`env`."""
+
+        return await self.env(name)
 
     async def set_env(
         self: InteractiveObject, key: str, value: str
@@ -678,6 +797,13 @@ class BaseInteractiveCommands:
             "SetEnv", self._request(env_req), models.sliverpb.SetEnv
         )
 
+    async def env_set(
+        self: BaseInteractiveCommands, key: str, value: str
+    ) -> models.sliverpb.SetEnv:
+        """Set a variable, matching Sliver's ``env set`` command."""
+
+        return await self.set_env(key, value)
+
     async def unset_env(self: InteractiveObject, key: str) -> models.sliverpb.UnsetEnv:
         """Unset an environment variable
 
@@ -691,13 +817,24 @@ class BaseInteractiveCommands:
             "UnsetEnv", self._request(env), models.sliverpb.UnsetEnv
         )
 
+    async def env_unset(
+        self: BaseInteractiveCommands, key: str
+    ) -> models.sliverpb.UnsetEnv:
+        """Unset a variable, matching Sliver's ``env unset`` command."""
+
+        return await self.unset_env(key)
+
     async def registry_read(
-        self: InteractiveObject, hive: str, reg_path: str, key: str, hostname: str
+        self: InteractiveObject,
+        hive: RegistryHive | str,
+        reg_path: str,
+        key: str,
+        hostname: str,
     ) -> models.sliverpb.RegistryRead:
         """Read a value from the remote system's registry (Windows only)
 
         :param hive: Registry hive to read value from
-        :type hive: str
+        :type hive: RegistryHive | str
         :param reg_path: Path to registry key to read
         :type reg_path: str
         :param key: Key name to read
@@ -708,7 +845,7 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.RegistryRead
         """
         reg = models.sliverpb.RegistryReadReq(
-            hive=hive, path=reg_path, key=key, hostname=hostname
+            hive=str(hive), path=reg_path, key=key, hostname=hostname
         )
         return await self._execute(
             "RegistryRead", self._request(reg), models.sliverpb.RegistryRead
@@ -716,7 +853,7 @@ class BaseInteractiveCommands:
 
     async def registry_write(
         self: InteractiveObject,
-        hive: str,
+        hive: RegistryHive | str,
         reg_path: str,
         key: str,
         hostname: str,
@@ -729,7 +866,7 @@ class BaseInteractiveCommands:
         """Write a value to the remote system's registry (Windows only)
 
         :param hive: Registry hive to write the key/value to
-        :type hive: str
+        :type hive: RegistryHive | str
         :param reg_path: Registry path to write to
         :type reg_path: str
         :param key: Registry key to write to
@@ -750,7 +887,7 @@ class BaseInteractiveCommands:
         :rtype: models.sliverpb.RegistryWrite
         """
         reg = models.sliverpb.RegistryWriteReq(
-            hive=hive,
+            hive=str(hive),
             path=reg_path,
             key=key,
             hostname=hostname,
@@ -765,24 +902,41 @@ class BaseInteractiveCommands:
             "RegistryWrite", self._request(reg), models.sliverpb.RegistryWrite
         )
 
-    async def registry_create_key(
-        self: InteractiveObject, hive: str, reg_path: str, key: str, hostname: str
+    async def registry_create(
+        self: BaseInteractiveCommands,
+        path: str,
+        *,
+        hive: RegistryHive | str = RegistryHive.CURRENT_USER,
+        hostname: str = "",
     ) -> models.sliverpb.RegistryCreateKey:
-        """Create a registry key on the remote system (Windows only)
+        """Create a key, matching Sliver's ``registry create`` command.
 
         :param hive: Registry hive to create key in
-        :type hive: str
-        :param reg_path: Registry path to create key in
-        :type reg_path: str
-        :param key: Key name
-        :type key: str
+        :type hive: RegistryHive | str
+        :param path: Full registry path including the key to create
+        :type path: str
         :param hostname: Hostname
         :type hostname: str
         :return: Pydantic registry-create result model
         :rtype: models.sliverpb.RegistryCreateKey
         """
+        normalized = path.strip().replace("/", "\\")
+        reg_path, separator, key = normalized.rpartition("\\")
+        if not separator or not reg_path or not key:
+            raise ValueError("path must include a parent path and key name")
+        return await self.registry_create_key(hive, reg_path, key, hostname)
+
+    async def registry_create_key(
+        self: BaseInteractiveCommands,
+        hive: RegistryHive | str,
+        reg_path: str,
+        key: str,
+        hostname: str,
+    ) -> models.sliverpb.RegistryCreateKey:
+        """Create a registry key using the historical split-path arguments."""
+
         reg = models.sliverpb.RegistryCreateKeyReq(
-            hive=hive, path=reg_path, key=key, hostname=hostname
+            hive=str(hive), path=reg_path, key=key, hostname=hostname
         )
         return await self._execute(
             "RegistryCreateKey",

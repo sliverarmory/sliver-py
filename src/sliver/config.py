@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
+
+CONFIG_ENV_VAR = "SLIVER_CONFIG"
+DEFAULT_CONFIG_PATH = Path("~/.sliver-client/configs/default.cfg").expanduser()
 
 
 class SliverWireGuardConfig(BaseModel):
@@ -51,3 +55,36 @@ class SliverClientConfig(BaseModel):
 
         with open(filepath, encoding="utf-8") as config_file:
             return cls.parse_config(config_file.read())
+
+    @classmethod
+    def resolve_path(
+        cls, filepath: os.PathLike[str] | str | None = None
+    ) -> Path:
+        """Resolve an explicit path, ``SLIVER_CONFIG``, or Sliver's default."""
+
+        if filepath is not None:
+            return Path(filepath).expanduser()
+        configured = os.environ.get(CONFIG_ENV_VAR)
+        return Path(configured).expanduser() if configured else DEFAULT_CONFIG_PATH
+
+    @classmethod
+    def from_file(
+        cls, filepath: os.PathLike[str] | str | None = None
+    ) -> SliverClientConfig:
+        """Load a validated operator config using Sliver's path conventions."""
+
+        return cls.parse_config_file(cls.resolve_path(filepath))
+
+
+class OperatorConfig(SliverClientConfig):
+    """Preferred name for a Sliver multiplayer operator configuration."""
+
+    @classmethod
+    def from_file(
+        cls, filepath: os.PathLike[str] | str | None = None
+    ) -> OperatorConfig:
+        """Load a config while preserving the preferred concrete type."""
+
+        path = cls.resolve_path(filepath)
+        with path.open(encoding="utf-8") as config_file:
+            return cls.model_validate_json(config_file.read())

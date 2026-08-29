@@ -5,27 +5,53 @@ This module is checked by mypy in CI; it is not executed as a test.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 from typing_extensions import assert_type
 
 from sliver import (
+    GOARCH,
+    GOOS,
+    BeaconOptions,
+    C2Endpoint,
+    Client,
+    EventType,
+    GeneratedImplant,
+    ImplantSpec,
     InteractiveBeacon,
     InteractiveSession,
+    Inventory,
+    OperatorConfig,
     SliverClient,
     SliverClientConfig,
     SliverWireGuardConfig,
+    Target,
     get_pydantic_model,
 )
+from sliver._rpc import PydanticSliverRPCStub
 from sliver.models.clientpb import (
     Beacon,
+    BeaconTask,
     Event,
     Generate,
+    GenerateStageReq,
     ImplantConfig,
+    ImplantProfile,
     OutputFormat,
     Session,
     Version,
 )
 from sliver.models.commonpb import File
-from sliver.models.sliverpb import Execute, Ls, Ping, Pwd, SockTabEntry
+from sliver.models.sliverpb import (
+    Execute,
+    GetSystem,
+    Ls,
+    Ping,
+    Pwd,
+    ServiceInfo,
+    SockTabEntry,
+    SpawnDll,
+)
 
 
 def model_contract() -> None:
@@ -72,6 +98,7 @@ def config_contract() -> None:
     assert_type(config.lhost, str)
     assert_type(config.lport, int)
     assert_type(config.wg, SliverWireGuardConfig | None)
+    assert_type(OperatorConfig.from_file(), OperatorConfig)
 
 
 async def client_contract(client: SliverClient, config: ImplantConfig) -> None:
@@ -84,6 +111,43 @@ async def client_contract(client: SliverClient, config: ImplantConfig) -> None:
         assert_type(event, Event)
 
 
+async def facade_contract(client: Client) -> None:
+    spec = ImplantSpec(
+        target=Target(os=GOOS.LINUX, arch=GOARCH.AMD64),
+        c2=[C2Endpoint.mtls("c2.example")],
+        beacon=BeaconOptions(
+            interval=timedelta(seconds=60),
+            jitter=timedelta(seconds=30),
+        ),
+    )
+
+    assert_type(Client.from_config_file(), Client)
+    assert_type(client.rpc, PydanticSliverRPCStub)
+    assert_type(await client.inventory(), Inventory)
+    assert_type(await client.generate(spec), GeneratedImplant)
+    assert_type(await client.tasks_fetch("task-id"), BeaconTask)
+    assert_type(
+        await client.profiles_new(ImplantProfile(name="profile")),
+        ImplantProfile,
+    )
+    assert_type(await client.profiles_generate("profile"), GeneratedImplant)
+    assert_type(
+        await client.profiles_stage(GenerateStageReq(profile="profile")),
+        GeneratedImplant,
+    )
+    assert_type(await client.use_session("session-id"), InteractiveSession)
+    assert_type(await client.use_beacon("beacon-id"), InteractiveBeacon)
+    assert_type(
+        await client.collect_events(EventType.JOB_STARTED, limit=1),
+        list[Event],
+    )
+
+    async with client as connected:
+        assert_type(connected, Client)
+    async with client.temporary_mtls() as listener:
+        assert_type(listener.job_id, int)
+
+
 async def interaction_contract(
     session: InteractiveSession, beacon: InteractiveBeacon
 ) -> None:
@@ -93,3 +157,6 @@ async def interaction_contract(
     assert_type(await session.pwd(), Pwd)
     assert_type(await session.ls(), Ls)
     assert_type(await session.execute("whoami"), Execute)
+    assert_type(await session.getsystem("spoolsv.exe", ImplantConfig()), GetSystem)
+    assert_type(await session.services_start("Spooler"), ServiceInfo)
+    assert_type(await session.spawndll(b"dll", keep_alive=True), SpawnDll)

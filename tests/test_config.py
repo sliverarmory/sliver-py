@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from sliver import SliverClientConfig, SliverWireGuardConfig
+from sliver import Client, OperatorConfig, SliverClientConfig, SliverWireGuardConfig
+from sliver.config import CONFIG_ENV_VAR, DEFAULT_CONFIG_PATH
 
 
 def _config_data(**overrides: object) -> dict[str, object]:
@@ -56,3 +58,35 @@ def test_operator_config_parses_latest_wireguard_shape() -> None:
 def test_operator_config_rejects_invalid_ports(port: int) -> None:
     with pytest.raises(ValidationError):
         SliverClientConfig.model_validate(_config_data(lport=port))
+
+
+def test_operator_config_loads_an_explicit_file(tmp_path: Path) -> None:
+    path = tmp_path / "operator.cfg"
+    path.write_text(json.dumps(_config_data()), encoding="utf-8")
+
+    config = OperatorConfig.from_file(path)
+
+    assert isinstance(config, OperatorConfig)
+    assert config.operator == "alice"
+    assert OperatorConfig.resolve_path(path) == path
+
+
+def test_preferred_client_factory_preserves_operator_config_type(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "operator.cfg"
+    path.write_text(json.dumps(_config_data()), encoding="utf-8")
+
+    client = Client.from_config_file(path)
+
+    assert isinstance(client.config, OperatorConfig)
+
+
+def test_operator_config_uses_environment_and_default_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(CONFIG_ENV_VAR, "~/operator.cfg")
+    assert OperatorConfig.resolve_path() == Path("~/operator.cfg").expanduser()
+
+    monkeypatch.delenv(CONFIG_ENV_VAR)
+    assert OperatorConfig.resolve_path() == DEFAULT_CONFIG_PATH

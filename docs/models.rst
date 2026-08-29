@@ -3,10 +3,45 @@ Pydantic model API
 
 SliverPy v0.1 has a strict Pydantic-only public boundary. Client, session,
 beacon, event, and low-level RPC methods accept and return Pydantic models,
-standard Python containers, or primitive Python values. The model classes are
-generated from the Sliver descriptors shipped at the exact submodule commit
-pinned by this repository, while generated transport messages remain private
-implementation details.
+standard Python containers, or primitive Python values. Human-facing domain
+models adapt common workflows to the model classes generated from the Sliver
+descriptors pinned by this repository. Generated transport messages remain
+private implementation details.
+
+Human-facing domain models
+--------------------------
+
+The package root exports small Pydantic models for concepts that otherwise
+require many schema fields or repeated literal values:
+
+* :class:`sliver.Target` validates a supported :class:`sliver.GOOS` and
+  :class:`sliver.GOARCH` pair;
+* :class:`sliver.C2Endpoint` constructs and normalizes supported C2 URLs;
+* :class:`sliver.BeaconOptions` and :class:`sliver.ShellcodeOptions` validate
+  mode-specific generation settings;
+* :class:`sliver.ImplantSpec` converts concise generation inputs to a generated
+  ``ImplantConfig`` or ``GenerateReq`` model;
+* :class:`sliver.GeneratedImplant` wraps build metadata and safely persists the
+  generated file; and
+* :class:`sliver.Inventory` is the typed result of
+  :meth:`sliver.Client.inventory`.
+
+These are ordinary Pydantic models. They validate assignment, reject unknown
+fields, serialize through the standard ``model_*`` methods, and provide explicit
+conversion methods where a generated model is needed. They do not create a
+second wire representation.
+
+.. code-block:: python
+
+    from sliver import C2Endpoint, GOARCH, GOOS, ImplantSpec, Target
+
+    spec = ImplantSpec(
+        target=Target(os=GOOS.LINUX, arch=GOARCH.AMD64),
+        c2=[C2Endpoint.mtls("c2.example.test")],
+    )
+    request = spec.to_generate_request(name="web-server")
+
+See :doc:`api/domain` for model-specific constructors and conversions.
 
 Model modules
 -------------
@@ -56,25 +91,30 @@ inherits from Pydantic's ``BaseModel``. Standard operations such as
 ``model_validate()``, ``model_dump()``, ``model_dump_json()``, and
 ``model_json_schema()`` are available.
 
-Enums and structured arguments
-------------------------------
+Generated enums and schema inputs
+---------------------------------
 
-Generated enums live in the same modules and inherit from
+Enums defined by Sliver's descriptors live in the same modules and inherit from
 :class:`sliver.models.ProtobufEnum`, an ``IntEnum``. Use an enum member or its
-integer value when validating an enum field; enum-name strings are not
-accepted. Structured client and interactive arguments use generated model or
-enum types rather than untyped mappings.
+integer value when validating a generated enum field; enum-name strings are not
+accepted. Common generated enums such as :class:`sliver.OutputFormat`,
+:class:`sliver.ShellcodeEncoder`, and :class:`sliver.RegistryType` are also
+re-exported from ``sliver`` so callers do not need to remember their descriptor
+module.
 
-For example, :meth:`sliver.SliverClient.generate_implant` accepts a Pydantic
-``ImplantConfig`` and returns a Pydantic ``Generate`` model:
+For example, the schema-level
+:meth:`sliver.SliverClient.generate_implant` accepts a Pydantic
+``ImplantConfig`` and returns a Pydantic ``Generate`` model. This remains useful
+for fields outside the concise :class:`sliver.ImplantSpec`:
 
 .. code-block:: python
 
-    from sliver.models.clientpb import ImplantC2, ImplantConfig, OutputFormat
+    from sliver import GOARCH, GOOS, OutputFormat
+    from sliver.models.clientpb import ImplantC2, ImplantConfig
 
     config = ImplantConfig(
-        goos="linux",
-        goarch="amd64",
+        goos=GOOS.LINUX,
+        goarch=GOARCH.AMD64,
         format=OutputFormat.EXECUTABLE,
         c2=[ImplantC2(url="mtls://127.0.0.1:8888")],
         include_mtls=True,
@@ -85,6 +125,12 @@ For example, :meth:`sliver.SliverClient.generate_implant` accepts a Pydantic
 Open enums retain unknown integer values as synthetic members named
 ``UNRECOGNIZED_<value>``. This lets a model represent a value added by a newer
 server without silently replacing it.
+
+Human-facing string constants such as :class:`sliver.GOOS`,
+:class:`sliver.GOARCH`, :class:`sliver.C2Protocol`, and
+:class:`sliver.EventType` are ``str``-compatible enums. They serialize to their
+established Sliver strings and can cross existing string validation boundaries.
+See :doc:`api/enums`.
 
 Python field names and validation aliases
 -----------------------------------------
@@ -218,9 +264,9 @@ structured arguments and results. Collection helpers such as ``sessions()``,
 Other high-level methods return one Pydantic model, a standard container, a
 primitive value, or ``None`` exactly as declared by their type annotation.
 
-The client's :attr:`sliver.client.BaseClient.pydantic_stub` is the supported
-low-level extension point for an RPC without a convenience method. It requires
-that RPC's Pydantic request model and returns its Pydantic response model:
+The client's :attr:`sliver.client.BaseClient.rpc` is the supported low-level
+extension point for an RPC without a convenience method. It requires that
+RPC's Pydantic request model and returns its Pydantic response model:
 
 .. code-block:: python
 
@@ -230,12 +276,14 @@ that RPC's Pydantic request model and returns its Pydantic response model:
         session_id="session-id",
         name="web-server",
     )
-    response = await client.pydantic_stub.Rename(request)
+    response = await client.rpc.rename(request)
 
-The stub supports unary and streaming calls while preserving the Pydantic-only
-request and response boundary. It is available only after
+The adapter supports unary and streaming calls while preserving the
+Pydantic-only request and response boundary. It is available only after
 ``await client.connect()`` and becomes unavailable after
 ``await client.close()``. Passing a generated transport message is a type error.
+``pydantic_stub`` and schema-style PascalCase RPC names remain compatibility
+aliases.
 
 Session and beacon model snapshots
 ----------------------------------
@@ -247,9 +295,11 @@ expose common scalar fields. The interaction owns no separate channel; close
 its parent client when finished.
 
 An :class:`sliver.InteractiveBeacon` similarly exposes a defensive copy through
-its ``beacon`` property. It also owns a local task-result watcher. Call
-``await beacon.close()`` before closing the parent client; this cancels pending
-local commands but does not terminate or delete the remote beacon.
+its ``beacon`` property. Beacon commands and public event subscriptions share
+one lazy event/task dispatcher owned by the parent client. Closing a
+client-created beacon wrapper does not stop that shared dispatcher, terminate
+the implant, or remove its server record; closing the client owns dispatcher
+and channel cleanup.
 
 Model API reference
 -------------------

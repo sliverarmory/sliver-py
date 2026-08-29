@@ -473,7 +473,7 @@ async def live_beacon(
         )
     finally:
         cleanup_failures = []
-        # RmBeacon removes a database record; it does not stop the implant.
+        # Stop the owned process first, then remove its database record.
         if process is not None:
             try:
                 await process.astop()
@@ -487,7 +487,7 @@ async def live_beacon(
         if target is not None:
             try:
                 await asyncio.wait_for(
-                    sliver_client.kill_beacon(
+                    sliver_client.rm_beacon(
                         target.id,
                         timeout=COMMAND_TIMEOUT,
                     ),

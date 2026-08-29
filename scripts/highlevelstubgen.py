@@ -21,7 +21,10 @@ MODULE_PREAMBLES = {
     "client": """\
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+import os
+from collections.abc import AsyncGenerator, Collection
+from contextlib import AbstractAsyncContextManager
+from datetime import timedelta
 
 import grpc
 
@@ -29,6 +32,8 @@ from . import models
 from ._rpc import PydanticSliverRPCStub
 from .beacon import InteractiveBeacon
 from .config import SliverClientConfig
+from .domain import GeneratedImplant, ImplantSpec, Inventory
+from .enums import EventType
 from .session import InteractiveSession
 """,
     "session": """\
@@ -51,13 +56,64 @@ from .interactive import BaseInteractiveCommands
 from __future__ import annotations
 
 from . import models
+from .enums import GOOS, LogonType, RegistryHive
 """,
     "config": """\
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pydantic import BaseModel
+""",
+    "domain": """\
+from __future__ import annotations
+
+from collections.abc import Mapping
+from datetime import timedelta
+from pathlib import Path
+
+from pydantic import BaseModel
+
+from .enums import (
+    GOARCH,
+    GOOS,
+    C2Protocol,
+    ConnectionStrategy,
+    OutputFormat,
+    ShellcodeBypass,
+    ShellcodeCompression,
+    ShellcodeEncoder,
+    ShellcodeEntropy,
+    ShellcodeExitOption,
+    ShellcodeHeaders,
+)
+from .models import clientpb, commonpb
+""",
+    "enums": """\
+from __future__ import annotations
+
+from enum import Enum, IntEnum
+
+from .models.clientpb import FileType as FileType
+from .models.clientpb import OutputFormat as OutputFormat
+from .models.clientpb import ShellcodeEncoder as ShellcodeEncoder
+from .models.clientpb import StageProtocol as StageProtocol
+from .models.sliverpb import ImplantCapability as ImplantCapability
+from .models.sliverpb import PivotType as PivotType
+from .models.sliverpb import RegistryType as RegistryType
+
+class _StringEnum(str, Enum): ...
+""",
+    "errors": """\
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import TypeVar
+
+from pydantic import BaseModel
+
+_ResultT = TypeVar("_ResultT", bound=BaseModel)
 """,
 }
 
@@ -69,7 +125,13 @@ CLASS_ATTRIBUTES = {
     ("beacon", "BaseBeacon"): ("timeout: int",),
 }
 
-PUBLIC_DUNDERS = {"__init__", "__repr__", "__str__"}
+PUBLIC_DUNDERS = {
+    "__aenter__",
+    "__aexit__",
+    "__init__",
+    "__repr__",
+    "__str__",
+}
 
 
 def _is_public_method(name: str) -> bool:
@@ -119,7 +181,7 @@ def _stub_function(
     return stub
 
 
-def _pydantic_constructor(class_node: ast.ClassDef) -> str:
+def _pydantic_constructor(class_node: ast.ClassDef) -> str | None:
     parameters: list[str] = []
     for node in class_node.body:
         if not isinstance(node, ast.AnnAssign) or not isinstance(node.target, ast.Name):
@@ -127,10 +189,24 @@ def _pydantic_constructor(class_node: ast.ClassDef) -> str:
         if node.target.id.startswith("_") or node.target.id == "model_config":
             continue
         parameter = f"{node.target.id}: {ast.unparse(node.annotation)}"
-        if isinstance(node.value, ast.Constant) and node.value.value is None:
+        if _field_has_default(node.value):
             parameter += " = ..."
         parameters.append(parameter)
+    if not parameters:
+        return None
     return f"def __init__(self, *, {', '.join(parameters)}) -> None: ..."
+
+
+def _field_has_default(value: ast.expr | None) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, ast.Call) and isinstance(value.func, ast.Name):
+        if value.func.id == "Field":
+            return bool(value.args) or any(
+                keyword.arg in {"default", "default_factory"}
+                for keyword in value.keywords
+            )
+    return True
 
 
 def _assignment_annotation(value: ast.expr) -> str | None:
@@ -155,7 +231,10 @@ def _assignment_annotation(value: ast.expr) -> str | None:
 
 
 def _render_class(module: str, class_node: ast.ClassDef) -> str:
-    bases = ", ".join(ast.unparse(base) for base in class_node.bases)
+    bases = ", ".join(
+        "BaseModel" if ast.unparse(base) == "_DomainModel" else ast.unparse(base)
+        for base in class_node.bases
+    )
     header = f"class {class_node.name}"
     if bases:
         header += f"({bases})"
@@ -169,10 +248,12 @@ def _render_class(module: str, class_node: ast.ClassDef) -> str:
         if not isinstance(target, ast.Name) or target.id.startswith("_"):
             continue
         annotation = _assignment_annotation(node.value)
-        if annotation is not None:
+        if module == "enums":
+            members.append(f"{target.id} = ...")
+        elif annotation is not None:
             members.append(f"{target.id}: {annotation}")
 
-    if module == "config":
+    if module in {"config", "domain", "errors"}:
         for node in class_node.body:
             if not isinstance(node, ast.AnnAssign) or not isinstance(
                 node.target, ast.Name
@@ -181,7 +262,10 @@ def _render_class(module: str, class_node: ast.ClassDef) -> str:
             if node.target.id.startswith("_") or node.target.id == "model_config":
                 continue
             members.append(f"{node.target.id}: {ast.unparse(node.annotation)}")
-        members.append(_pydantic_constructor(class_node))
+        if module in {"config", "domain"}:
+            constructor = _pydantic_constructor(class_node)
+            if constructor is not None:
+                members.append(constructor)
 
     for node in class_node.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and (
@@ -222,7 +306,13 @@ def _render_module(module: str) -> str:
     sections.extend(
         _render_class(module, node)
         for node in tree.body
-        if isinstance(node, ast.ClassDef)
+        if isinstance(node, ast.ClassDef) and not node.name.startswith("_")
+    )
+    sections.extend(
+        ast.unparse(ast.fix_missing_locations(_stub_function(node)))
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _is_public_method(node.name)
     )
     return "\n\n".join(sections) + "\n"
 
@@ -254,9 +344,8 @@ def _render_package_init() -> str:
         "",
     ]
     reexports: list[tuple[str, str]] = []
-    for export in exports:
-        imported = imports.get(export)
-        if imported is None:
+    for export, imported in imports.items():
+        if export not in exports:
             continue
         module, original = imported
         if module is None:
@@ -265,7 +354,7 @@ def _render_package_init() -> str:
             reexports.append(
                 (module, f"from .{module} import {original} as {export}")
             )
-    lines.extend(line for _, line in sorted(reexports))
+    lines.extend(line for _, line in reexports)
     lines.extend(("", "__version__: str", ""))
     return "\n".join(lines)
 

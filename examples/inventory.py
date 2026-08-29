@@ -5,40 +5,18 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
 
-from sliver import SliverClient
-from sliver.models.clientpb import Beacon, Job, Operator, Session, Version
-
-from .common import connected_client
-
-
-@dataclass(frozen=True, slots=True)
-class Inventory:
-    """A point-in-time snapshot of common Sliver server resources."""
-
-    version: Version
-    sessions: list[Session]
-    beacons: list[Beacon]
-    jobs: list[Job]
-    operators: list[Operator]
+from sliver import Client, Inventory
 
 
 async def collect_inventory(
-    client: SliverClient,
+    client: Client,
     *,
     timeout: int = 60,
 ) -> Inventory:
     """Collect common server resources from an already-connected client."""
 
-    version, sessions, beacons, jobs, operators = await asyncio.gather(
-        client.version(timeout=timeout),
-        client.sessions(timeout=timeout),
-        client.beacons(timeout=timeout),
-        client.jobs(timeout=timeout),
-        client.operators(timeout=timeout),
-    )
-    return Inventory(version, sessions, beacons, jobs, operators)
+    return await client.inventory(timeout=timeout)
 
 
 def format_inventory(inventory: Inventory) -> str:
@@ -76,7 +54,8 @@ def format_inventory(inventory: Inventory) -> str:
 
 
 async def _run(config: str | None, timeout: int) -> None:
-    async with connected_client(config) as client:
+    client = Client.from_config_file(config)
+    async with client:
         print(format_inventory(await collect_inventory(client, timeout=timeout)))
 
 

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import keyword
+import re
 import shutil
 import subprocess
 import sys
@@ -27,6 +29,16 @@ _CALL_TYPES = {
     (True, True): "StreamStreamMultiCallable",
 }
 _MODEL_PACKAGES = {"clientpb", "commonpb", "sliverpb"}
+_CAMEL_BOUNDARY = re.compile(r"(.)([A-Z][a-z]+)")
+_ACRONYM_BOUNDARY = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def _python_method_name(rpc_name: str) -> str:
+    """Convert an upstream RPC name to its public Python spelling."""
+
+    name = _CAMEL_BOUNDARY.sub(r"\1_\2", rpc_name)
+    name = _ACRONYM_BOUNDARY.sub(r"\1_\2", name).lower()
+    return f"{name}_" if keyword.iskeyword(name) else name
 
 
 def _service_descriptor() -> descriptor_pb2.ServiceDescriptorProto:
@@ -107,6 +119,8 @@ def _render_implementation(
         call_type = _CALL_TYPES[(method.client_streaming, method.server_streaming)]
         request_type = _model_expression(method.input_type)
         response_type = _model_expression(method.output_type)
+        python_name = _python_method_name(method.name)
+        lines.append(f"    {python_name}: {call_type}[{request_type}, {response_type}]")
         lines.append(f"    {method.name}: {call_type}[{request_type}, {response_type}]")
 
     lines.extend(
@@ -121,13 +135,16 @@ def _render_implementation(
         call_type = _CALL_TYPES[(method.client_streaming, method.server_streaming)]
         request_type = _model_expression(method.input_type)
         response_type = _model_expression(method.output_type)
+        python_name = _python_method_name(method.name)
         lines.extend(
             [
-                f"        self.{method.name} = {call_type}(",
+                f"        self.{python_name} = {call_type}(",
                 f"            raw.{method.name},",
                 f"            {request_type},",
                 f"            {response_type},",
+                f'            "{method.name}",',
                 "        )",
+                f"        self.{method.name} = self.{python_name}",
             ]
         )
 
@@ -160,6 +177,8 @@ def _render_stub(methods: list[descriptor_pb2.MethodDescriptorProto]) -> str:
         call_type = _CALL_TYPES[(method.client_streaming, method.server_streaming)]
         request_type = _model_expression(method.input_type)
         response_type = _model_expression(method.output_type)
+        python_name = _python_method_name(method.name)
+        lines.append(f"    {python_name}: {call_type}[{request_type}, {response_type}]")
         lines.append(f"    {method.name}: {call_type}[{request_type}, {response_type}]")
 
     lines.extend(

@@ -6,7 +6,7 @@ from typing import Any
 import grpc
 import pytest
 
-from sliver import models
+from sliver import RPCError, models
 from sliver._pb.clientpb import client_pb2
 from sliver._pb.commonpb import common_pb2
 from sliver._rpc import (
@@ -99,6 +99,17 @@ class _RecordingCallable:
         return self.call
 
 
+class _FailingRawCall(_RawCall):
+    def __await__(self):
+        async def fail() -> Any:
+            raise grpc.aio.AioRpcError(
+                grpc.StatusCode.UNAVAILABLE,
+                details="server unavailable",
+            )
+
+        return fail().__await__()
+
+
 async def test_unary_unary_converts_request_response_and_call_options() -> None:
     raw_call = _RawCall(unary_response=client_pb2.Version(Major=1, Minor=2, Patch=3))
     raw_callable = _RecordingCallable(raw_call)
@@ -120,6 +131,23 @@ async def test_unary_unary_converts_request_response_and_call_options() -> None:
     assert isinstance(response, models.clientpb.Version)
     assert (response.major, response.minor, response.patch) == (1, 2, 3)
     assert isinstance(rpc(models.commonpb.Empty()), UnaryUnaryCall)
+
+
+async def test_rpc_transport_errors_use_the_public_error_taxonomy() -> None:
+    rpc = UnaryUnaryMultiCallable(
+        _RecordingCallable(_FailingRawCall()),
+        models.commonpb.Empty,
+        models.clientpb.Version,
+        "GetVersion",
+    )
+
+    with pytest.raises(RPCError) as raised:
+        await rpc(models.commonpb.Empty())
+
+    assert raised.value.operation == "GetVersion"
+    assert raised.value.status == "UNAVAILABLE"
+    assert raised.value.details == "server unavailable"
+    assert isinstance(raised.value.__cause__, grpc.aio.AioRpcError)
 
 
 async def test_unary_stream_converts_iteration_and_read_responses() -> None:

@@ -1,14 +1,18 @@
 # SliverPy
 
-SliverPy is an async Python client library for [Sliver](https://github.com/BishopFox/sliver). It automates operator interactions over Sliver's mutually authenticated gRPC API and exposes descriptor-generated [Pydantic](https://docs.pydantic.dev/) models instead of generated transport messages at the public API. [See the project documentation for more details](https://sliverpy.readthedocs.io/).
+SliverPy is an async Python client library for [Sliver](https://github.com/BishopFox/sliver). It automates operator interactions over Sliver's mutually authenticated gRPC API and keeps generated transport messages behind a public boundary made of [Pydantic](https://docs.pydantic.dev/) models, Python primitives, and normal containers. [See the project documentation for more details](https://sliverpy.readthedocs.io/).
 
-The v0.1 API is generated from the Sliver definitions at the exact submodule commit pinned by this repository. Not every Sliver RPC has a high-level convenience method yet; the Pydantic-only `pydantic_stub` remains available for advanced use.
+The v0.1 API is generated from the Sliver definitions at the exact submodule commit pinned by this repository. The concise `Client` API follows Sliver's command names, while `client.rpc` provides typed Pydantic access to every RPC when a high-level method is not available.
+
+Single-token commands retain their Sliver spelling (`runas`, `spawndll`,
+`rev2self`); nested command paths are flattened in order (`profiles generate`
+becomes `profiles_generate`).
 
 [![SliverPy](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml/badge.svg)](https://github.com/moloch--/sliver-py/actions/workflows/autorelease.yml)
 [![Documentation Status](https://readthedocs.org/projects/sliverpy/badge/?version=latest)](https://sliverpy.readthedocs.io/en/latest/?badge=latest)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-### Install
+## Install
 
 Add the package to a uv-managed Python 3.10 or newer project:
 
@@ -22,7 +26,7 @@ Installation with pip remains supported:
 python -m pip install sliver-py
 ```
 
-#### Kali Linux / Fix OpenSSL Errors
+### Kali Linux / Fix OpenSSL Errors
 
 [Python's TLS implementation](https://docs.python.org/3/library/ssl.html) may exhibit platform-specific behavior. If a pip-based installation encounters OpenSSL connection errors, reinstall gRPC Python from source. Depending on the distribution, this may also require GCC (for example, `build-essential`) and the OpenSSL development package:
 
@@ -30,161 +34,172 @@ python -m pip install sliver-py
 GRPC_PYTHON_BUILD_SYSTEM_OPENSSL=True python -m pip install --force-reinstall --no-binary grpcio grpcio
 ```
 
-## Examples
+## Quick start
 
-Runnable, cross-platform E2E-tested programs for inventory, listener, event,
-implant-generation, session, and beacon workflows live in
-[`examples/`](examples/). For more details, read the
-[project documentation](https://sliverpy.rtfd.io/).
-
-#### Interact with Sessions
+`Client.from_config_file()` resolves an explicit path, then `SLIVER_CONFIG`,
+then Sliver's default `~/.sliver-client/configs/default.cfg`. The client is an
+async context manager, so connection and cleanup have one owner:
 
 ```python
-#!/usr/bin/env python3
-
 import asyncio
-from pathlib import Path
 
-from sliver import SliverClient, SliverClientConfig
-
-DEFAULT_CONFIG = Path.home() / ".sliver-client" / "configs" / "default.cfg"
+from sliver import Client
 
 
 async def main() -> None:
-    config = SliverClientConfig.parse_config_file(DEFAULT_CONFIG)
-    client = SliverClient(config)
-    try:
-        version = await client.connect()
-        print(
-            f"[*] Connected to Sliver "
-            f"{version.major}.{version.minor}.{version.patch}"
-        )
+    async with Client.from_config_file() as client:
+        inventory = await client.inventory()
+        print(inventory.version)
+        for session in inventory.sessions:
+            print(session.id, session.name, session.remote_address)
 
+
+asyncio.run(main())
+```
+
+The longer `SliverClient` and `SliverClientConfig` names remain available for
+existing programs. New code should prefer `Client`, `OperatorConfig`, the async
+context manager, command-aligned method names, and the typed enums and domain
+models exported from `sliver`.
+
+## Idiomatic generation
+
+Human-facing models validate common workflows without exposing schema-shaped
+configuration fields or magic strings:
+
+```python
+import asyncio
+from pathlib import Path
+
+from sliver import (
+    C2Endpoint,
+    Client,
+    GOARCH,
+    GOOS,
+    ImplantSpec,
+    OutputFormat,
+    Target,
+)
+
+
+async def main() -> None:
+    async with Client.from_config_file() as client:
+        implant = await client.generate(
+            ImplantSpec(
+                target=Target(os=GOOS.LINUX, arch=GOARCH.AMD64),
+                c2=[C2Endpoint.mtls("c2.example.test")],
+                output_format=OutputFormat.EXECUTABLE,
+            ),
+            name="web-server",
+        )
+        saved = implant.save(Path("artifacts") / implant.filename)
+        print(saved)
+
+
+asyncio.run(main())
+```
+
+`ImplantSpec`, `Target`, `C2Endpoint`, `BeaconOptions`, and `ShellcodeOptions`
+convert to the generated Pydantic request models. `GeneratedImplant.save()`
+uses exclusive creation by default so an existing artifact is not overwritten
+silently.
+
+Saved profiles use Sliver's command vocabulary as well:
+`profiles_generate(profile_name)` and `profiles_stage(request)` return the same
+rich `GeneratedImplant` result shape.
+
+## Sessions, beacons, and events
+
+Use `find_*()` when absence is expected, `get_*()` when it is an error, and
+`use_*()` (or `use(model)`) to obtain an interactive wrapper:
+
+```python
+import asyncio
+
+from sliver import Client, EventType
+
+
+async def main() -> None:
+    async with Client.from_config_file() as client:
         sessions = await client.sessions()
-        if not sessions:
-            print("[*] No sessions")
-            return
+        if sessions:
+            session = await client.use(sessions[0])
+            listing = await session.ls()
+            print(listing.path)
 
-        print(f"[*] Interacting with session {sessions[0].name!r}")
-        interaction = await client.interact_session(sessions[0].id)
-        if interaction is None:
-            print("[*] Session disconnected")
-            return
-
-        listing = await interaction.ls()
-        print(f"[*] ls: {listing!r}")
-    finally:
-        await client.close()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-`InteractiveSession.session` returns a defensive copy of the complete
-`sliver.models.clientpb.Session` metadata model. Convenience properties such as
-`session_id`, `name`, `hostname`, `os`, `arch`, and `pid` expose common fields.
-The interaction shares the client's channel, so closing the client completes
-its cleanup.
-
-#### Interact with Beacons
-
-```python
-#!/usr/bin/env python3
-
-import asyncio
-from pathlib import Path
-
-from sliver import SliverClient, SliverClientConfig
-
-DEFAULT_CONFIG = Path.home() / ".sliver-client" / "configs" / "default.cfg"
-
-
-async def main() -> None:
-    config = SliverClientConfig.parse_config_file(DEFAULT_CONFIG)
-    client = SliverClient(config)
-    interaction = None
-    try:
-        version = await client.connect()
-        print(
-            f"[*] Connected to Sliver "
-            f"{version.major}.{version.minor}.{version.patch}"
+        connected = await client.collect_events(
+            EventType.SESSION_CONNECTED,
+            limit=1,
+            timeout=30,
         )
-
-        beacons = await client.beacons()
-        if not beacons:
-            print("[*] No beacons")
-            return
-
-        print(f"[*] Interacting with beacon {beacons[0].name!r}")
-        interaction = await client.interact_beacon(beacons[0].id)
-        if interaction is None:
-            print("[*] Beacon disappeared")
-            return
-
-        listing = await interaction.ls()
-        print(f"[*] ls: {listing!r}")
-    finally:
-        if interaction is not None:
-            await interaction.close()
-        await client.close()
+        print(connected)
 
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
-Closing an `InteractiveBeacon` stops its local task-result watcher; it does not terminate or remove the remote beacon.
-`InteractiveBeacon.beacon` returns a defensive copy of the complete
-`sliver.models.clientpb.Beacon` metadata model, with matching scalar convenience
-properties such as `beacon_id`, `name`, `hostname`, `os`, `arch`, and `pid`.
+`client.events()` is the streaming form and accepts an `EventType`, a string,
+or a collection of either. All subscriptions and interactive beacon commands
+share one lazy event stream owned by the client. Subscriber buffers are
+bounded; slow consumers should process or hand off events promptly. The broker
+reconnects after an unexpected stream interruption, while each beacon command's
+deadline remains authoritative. Closing the client stops subscriptions,
+cancels pending task waits, and closes the channel in that order.
 
-## Pydantic models
+An `InteractiveBeacon` command queues a remote task and awaits its typed result.
+On timeout or local cancellation, SliverPy cleans up the local waiter and asks
+the server to cancel the task when supported. `InteractiveBeacon.close()` is
+retained for compatibility, but a wrapper obtained from `Client` does not own
+the shared dispatcher. It never terminates or removes the remote beacon.
 
-Every top-level Sliver API message and enum is a concrete, importable Python
-class under `sliver.models`. For example, `Event` and `Session` are defined in
-`sliver.models.clientpb`, while `File` is defined in
-`sliver.models.commonpb`. Nested messages and enums remain attributes of their
-containing model, while map entries become normal dictionaries. Model
-attributes and constructor arguments use Python `snake_case`; original schema
-field names remain accepted as validation aliases.
+The command-aligned lifecycle methods deliberately distinguish two operations:
+
+- `await client.kill_beacon(beacon_id)` queues a command to terminate the
+  beacon implant process.
+- `await client.beacons_rm(beacon_id)` removes the server's beacon record without
+  terminating a running implant.
+
+Runnable, cross-platform E2E-tested programs for inventory, listeners, events,
+implant generation, sessions, and beacons live in [`examples/`](examples/).
+
+## Pydantic RPC escape hatch
+
+Every public structured request and response is a concrete Pydantic class under
+`sliver.models`. Model attributes use Python `snake_case`; original schema field
+names remain accepted as validation aliases. When no high-level method exists,
+use the connected client's `rpc` property:
 
 ```python
-from sliver.models.clientpb import ImplantC2, ImplantConfig, OutputFormat, RenameReq
+from sliver.models.clientpb import RenameReq
 
-# Preferred v0.1 spelling.
-request = RenameReq(
-    session_id="session-id",
-    name="web-server",
-)
-
-# Schema-shaped mappings are accepted at Pydantic validation boundaries.
-same_request = RenameReq.model_validate(
-    {"SessionID": "session-id", "Name": "web-server"}
-)
-assert same_request.session_id == request.session_id
-
-# Enum fields use generated IntEnum members, and nested messages use models.
-implant_config = ImplantConfig(
-    goos="linux",
-    goarch="amd64",
-    format=OutputFormat.EXECUTABLE,
-    c2=[ImplantC2(url="mtls://127.0.0.1:8888")],
-    include_mtls=True,
-)
+request = RenameReq(session_id="session-id", name="web-server")
+await client.rpc.rename(request)
 ```
 
-Models support normal Pydantic validation and serialization methods, including `model_validate()`, `model_dump()`, `model_dump_json()`, and `model_json_schema()`. Repeated fields are lists, map fields are dictionaries, and enum fields use generated `IntEnum` members.
+The RPC adapter validates the request model and returns the declared Pydantic
+response model. Generated transport messages remain private. `rpc` is available
+only while connected and raises `NotConnectedError` otherwise. The historical
+`pydantic_stub` property and PascalCase RPC spellings are compatibility aliases.
 
-After `SliverClient.connect()`, every client, session, and beacon method accepts and returns only Pydantic models, standard Python containers, or primitive values. Advanced callers can invoke an RPC that lacks a high-level convenience method through the same Pydantic-only boundary:
+## Errors
 
-```python
-await client.pydantic_stub.Rename(request)
-```
+High-level failures use exceptions exported from `sliver`:
 
-`pydantic_stub` is available only while the client is connected and validates each RPC's request model. The generated wire implementation is private: external callers neither pass nor receive generated transport messages.
+- `RPCError` normalizes gRPC transport failures and records the RPC operation,
+  status, and details.
+- `ResourceNotFoundError` distinguishes required `get_*()`/`use_*()` lookups
+  from optional `find_*()` results.
+- `CommandError` reports a command result whose Sliver response contains an
+  error.
+- `SliverTimeoutError` reports library-owned deadlines and is also a built-in
+  `TimeoutError`.
+- `CleanupError` collects failures while releasing an owned resource.
+- `UnsupportedTargetError` reports a host that cannot be mapped to a supported
+  `GOOS`/`GOARCH` pair.
 
-See the [Pydantic model API](https://sliverpy.readthedocs.io/en/latest/models.html) for modules, serialization, aliases, nested types, field presence, and validation details.
+See the [project documentation](https://sliverpy.rtfd.io/) for configuration,
+domain models, enums, event/task semantics, the complete API, and the
+compatibility policy.
 
 ## Development
 

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from pydantic import BaseModel
+
+CONFIG_ENV_VAR: str
 
 class SliverWireGuardConfig(BaseModel):
     server_pub_key: str
@@ -50,4 +53,17 @@ class SliverClientConfig(BaseModel):
 
     @classmethod
     def parse_config_file(cls, filepath: os.PathLike[str] | str) -> SliverClientConfig:
+        ...
+
+    @classmethod
+    def resolve_path(cls, filepath: os.PathLike[str] | str | None=None) -> Path:
+        ...
+
+    @classmethod
+    def from_file(cls, filepath: os.PathLike[str] | str | None=None) -> SliverClientConfig:
+        ...
+
+class OperatorConfig(SliverClientConfig):
+    @classmethod
+    def from_file(cls, filepath: os.PathLike[str] | str | None=None) -> OperatorConfig:
         ...

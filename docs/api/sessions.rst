@@ -7,8 +7,11 @@ Pydantic models, and command arguments are Pydantic models or ordinary Python
 types such as ``str``, ``int``, ``bool``, ``bytes``, and ``list[str]``.
 
 Interactive sessions share the parent client's gRPC channel and do not own a
-background watcher. Close the parent client with ``await client.close()`` when
-finished. Shared command signatures are documented under :doc:`commands`.
+background watcher. Obtain one with :meth:`sliver.Client.use_session` or
+:meth:`sliver.Client.use`; a missing required target raises
+:class:`sliver.ResourceNotFoundError`. Close the parent client, preferably by
+using its async context manager, when finished. Shared command signatures are
+documented under :doc:`commands`.
 
 The ``session`` property returns a defensive copy of the complete
 ``sliver.models.clientpb.Session`` model captured when the interaction was

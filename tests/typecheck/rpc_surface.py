@@ -15,16 +15,16 @@ from sliver.models import clientpb, commonpb, sliverpb
 
 
 async def check_rpc_types(stub: PydanticSliverRPCStub) -> None:
-    version_call = stub.GetVersion(commonpb.Empty())
+    version_call = stub.get_version(commonpb.Empty())
     assert_type(version_call, UnaryUnaryCall[clientpb.Version])
     assert_type(await version_call, clientpb.Version)
 
-    event_call = stub.Events(commonpb.Empty())
+    event_call = stub.events(commonpb.Empty())
     assert_type(event_call, UnaryStreamCall[clientpb.Event])
     async for event in event_call:
         assert_type(event, clientpb.Event)
 
-    log_call = stub.ClientLog()
+    log_call = stub.client_log()
     assert_type(
         log_call,
         StreamUnaryCall[clientpb.ClientLogData, commonpb.Empty],
@@ -32,7 +32,7 @@ async def check_rpc_types(stub: PydanticSliverRPCStub) -> None:
     await log_call.write(clientpb.ClientLogData(stream="stdout", data=b"data"))
     assert_type(await log_call, commonpb.Empty)
 
-    tunnel_call = stub.TunnelData()
+    tunnel_call = stub.tunnel_data()
     assert_type(
         tunnel_call,
         StreamStreamCall[sliverpb.TunnelData, sliverpb.TunnelData],

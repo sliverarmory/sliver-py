@@ -1,61 +1,67 @@
-"""Start a loopback mTLS listener temporarily and always stop its job."""
+"""Run a loopback mTLS listener with managed cleanup."""
 
 from __future__ import annotations
 
 import argparse
 import asyncio
 from collections.abc import Sequence
-from dataclasses import dataclass
 
-from sliver import SliverClient
-from sliver.models.clientpb import KillJob, ListenerJob
-
-from .common import connected_client
-
-
-@dataclass(frozen=True, slots=True)
-class TemporaryListenerResult:
-    """The public models returned while starting and stopping the listener."""
-
-    started: ListenerJob
-    stopped: KillJob
+from sliver import Client
+from sliver.models.clientpb import ListenerJob
 
 
 async def run_temporary_listener(
-    client: SliverClient,
+    client: Client,
     *,
     host: str = "127.0.0.1",
     port: int = 8888,
     duration: float = 60.0,
     timeout: int = 60,
-) -> TemporaryListenerResult:
+) -> ListenerJob:
     """Run one mTLS listener for ``duration`` seconds, then stop it."""
 
     if duration < 0:
         raise ValueError("duration must not be negative")
-    started = await client.start_mtls_listener(host=host, port=port, timeout=timeout)
-    if started.job_id <= 0:
-        raise RuntimeError("Sliver did not return a listener job ID")
+
+    if hasattr(client, "temporary_mtls"):
+        async with client.temporary_mtls(
+            host=host,
+            port=port,
+            timeout=timeout,
+        ) as listener:
+            if listener.job_id <= 0:
+                raise RuntimeError("Sliver did not return a listener job ID")
+            await asyncio.sleep(duration)
+        return listener
+
+    # Compatibility for callers that copied the pre-facade example test double.
+    listener = await client.start_mtls_listener(
+        host=host,
+        port=port,
+        timeout=timeout,
+    )
     try:
         await asyncio.sleep(duration)
     finally:
-        stopped = await client.kill_job(started.job_id, timeout=timeout)
-        if stopped.id != started.job_id or not stopped.success:
-            raise RuntimeError(f"Sliver did not stop listener job {started.job_id}")
-    return TemporaryListenerResult(started, stopped)
+        stopped = await client.kill_job(listener.job_id, timeout=timeout)
+        if stopped.id != listener.job_id or not stopped.success:
+            raise RuntimeError(f"Sliver did not stop listener job {listener.job_id}")
+    return listener
 
 
 async def _run(args: argparse.Namespace) -> None:
-    async with connected_client(args.config) as client:
-        result = await run_temporary_listener(
+    client = Client.from_config_file(args.config)
+    async with client:
+        listener = await run_temporary_listener(
             client,
             host=args.host,
             port=args.port,
             duration=args.duration,
             timeout=args.timeout,
         )
-    print(f"Started and stopped job {result.started.job_id}")
-    print(f"Stop succeeded: {result.stopped.success}")
+
+    print(f"Started and stopped job {listener.job_id}")
+    print("Stop succeeded: True")
 
 
 def main(argv: Sequence[str] | None = None) -> int:

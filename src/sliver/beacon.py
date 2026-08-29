@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
+from collections.abc import AsyncGenerator, Collection
 from contextlib import suppress
 from typing import TypeVar
 
@@ -26,11 +28,364 @@ import grpc
 from . import models
 from ._protocols import RequestRoutedModel
 from ._rpc import PydanticSliverRPCStub
+from .enums import EventType
+from .errors import SliverTimeoutError, raise_for_command_error
 from .interactive import BaseInteractiveCommands
 from .models import ProtobufModel, _model_from_bytes
 
 _RequestT = TypeVar("_RequestT", bound=RequestRoutedModel)
 _ResultT = TypeVar("_ResultT", bound=ProtobufModel)
+
+
+class _EventStreamStopped:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+
+
+class _ClientEventBroker:
+    """Multiplex one client event stream to task waiters and subscribers."""
+
+    _EVENT_TYPE = EventType.BEACON_TASK_RESULT.value
+    _MAX_ORPHANED_RESULTS = 256
+    _SUBSCRIBER_QUEUE_SIZE = 256
+    _REMOTE_CANCEL_TIMEOUT = 5.0
+    _INITIAL_RECONNECT_DELAY = 0.25
+    _MAX_RECONNECT_DELAY = 5.0
+
+    def __init__(self, stub: PydanticSliverRPCStub) -> None:
+        self._log = logging.getLogger(self.__class__.__name__)
+        self._stub = stub
+        self._pending: dict[
+            str, tuple[asyncio.Future[ProtobufModel], type[ProtobufModel], float | None]
+        ] = {}
+        self._orphaned_results: OrderedDict[str, None] = OrderedDict()
+        self._resolvers: dict[str, asyncio.Task[None]] = {}
+        self._subscribers: dict[
+            int,
+            tuple[
+                asyncio.Queue[models.clientpb.Event | _EventStreamStopped],
+                frozenset[str] | None,
+            ],
+        ] = {}
+        self._next_subscriber_id = 0
+        self._watcher: asyncio.Task[None] | None = None
+        self._ready = asyncio.Event()
+        self._start_lock = asyncio.Lock()
+        self._state_lock = asyncio.Lock()
+        self._watcher_error: Exception | None = None
+        self._closed = False
+
+    async def start(self) -> None:
+        """Start the shared event subscription once, on first use."""
+
+        if self._closed:
+            raise RuntimeError("client event broker is closed")
+        async with self._start_lock:
+            if self._closed:
+                raise RuntimeError("client event broker is closed")
+            if self._watcher is None:
+                self._watcher = asyncio.create_task(self._event_stream())
+
+        await self._ready.wait()
+        if self._closed:
+            raise RuntimeError("client event broker is closed")
+        watcher = self._watcher
+        if watcher is None or watcher.done():
+            raise RuntimeError("client event broker is not running") from self._watcher_error
+
+    async def subscribe(
+        self, event_types: Collection[str] | None = None
+    ) -> AsyncGenerator[models.clientpb.Event, None]:
+        """Subscribe to the shared event stream with bounded buffering."""
+
+        filters = frozenset(event_types) if event_types is not None else None
+        queue: asyncio.Queue[models.clientpb.Event | _EventStreamStopped] = (
+            asyncio.Queue(maxsize=self._SUBSCRIBER_QUEUE_SIZE)
+        )
+        async with self._state_lock:
+            if self._closed:
+                raise RuntimeError("client event broker is closed")
+            subscriber_id = self._next_subscriber_id
+            self._next_subscriber_id += 1
+            self._subscribers[subscriber_id] = (queue, filters)
+
+        try:
+            try:
+                await self.start()
+            except RuntimeError:
+                if self._closed:
+                    return
+                raise
+            while True:
+                item = await queue.get()
+                if isinstance(item, _EventStreamStopped):
+                    if item.error is not None:
+                        raise RuntimeError("client event stream stopped") from item.error
+                    return
+                yield item
+        finally:
+            async with self._state_lock:
+                self._subscribers.pop(subscriber_id, None)
+
+    async def wait_for_result(
+        self,
+        task_id: str,
+        result_type: type[_ResultT],
+        timeout: float | None,
+    ) -> _ResultT:
+        """Register a task result waiter and decode its Pydantic response."""
+
+        await self.start()
+        future: asyncio.Future[ProtobufModel] = (
+            asyncio.get_running_loop().create_future()
+        )
+        resolve_orphan = False
+        async with self._state_lock:
+            if self._closed:
+                raise RuntimeError("beacon task broker is closed")
+            if task_id in self._pending:
+                raise RuntimeError(f"beacon task {task_id!r} is already pending")
+            self._pending[task_id] = (future, result_type, timeout)
+            if task_id in self._orphaned_results:
+                self._orphaned_results.pop(task_id)
+                resolve_orphan = True
+
+        if resolve_orphan:
+            await self._schedule_resolution(task_id)
+
+        try:
+            result = await asyncio.wait_for(asyncio.shield(future), timeout=timeout)
+        except asyncio.TimeoutError as err:
+            await self._abandon(task_id, future)
+            await self._cancel_remote(task_id, timeout)
+            raise SliverTimeoutError(
+                operation=f"beacon task {task_id}", timeout=timeout
+            ) from err
+        except asyncio.CancelledError:
+            await self._abandon(task_id, future)
+            await self._cancel_remote(task_id, timeout)
+            raise
+        finally:
+            async with self._state_lock:
+                pending = self._pending.get(task_id)
+                if pending is not None and pending[0] is future:
+                    self._pending.pop(task_id)
+
+        if not isinstance(result, result_type):
+            raise TypeError(
+                f"beacon task returned {type(result).__name__}, "
+                f"expected {result_type.__name__}"
+            )
+        return result
+
+    async def close(self) -> None:
+        """Stop the dispatcher and fail all outstanding result waiters."""
+
+        if self._closed:
+            return
+        self._closed = True
+        self._ready.set()
+
+        watcher = self._watcher
+        if watcher is not None and not watcher.done():
+            watcher.cancel()
+
+        async with self._state_lock:
+            resolvers = list(self._resolvers.values())
+            self._resolvers.clear()
+            pending = list(self._pending.items())
+            self._pending.clear()
+            self._orphaned_results.clear()
+        for resolver in resolvers:
+            resolver.cancel()
+        stopped = RuntimeError("client event broker is closed")
+        for _, (future, _, _) in pending:
+            if not future.done():
+                future.set_exception(stopped)
+        await asyncio.gather(
+            *(
+                self._cancel_remote(task_id, timeout)
+                for task_id, (_, _, timeout) in pending
+            )
+        )
+
+        await self._stop_subscribers()
+
+        if watcher is not None:
+            with suppress(asyncio.CancelledError, Exception):
+                await watcher
+        for resolver in resolvers:
+            with suppress(asyncio.CancelledError, Exception):
+                await resolver
+
+    async def _abandon(
+        self, task_id: str, future: asyncio.Future[ProtobufModel]
+    ) -> None:
+        resolver: asyncio.Task[None] | None = None
+        async with self._state_lock:
+            pending = self._pending.get(task_id)
+            if pending is not None and pending[0] is future:
+                self._pending.pop(task_id)
+                resolver = self._resolvers.pop(task_id, None)
+        if not future.done():
+            future.cancel()
+        if resolver is not None:
+            resolver.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await resolver
+
+    async def _cancel_remote(self, task_id: str, timeout: float | None) -> None:
+        cancel_task = getattr(self._stub, "CancelBeaconTask", None)
+        if cancel_task is None:
+            return
+        cancel_timeout = self._REMOTE_CANCEL_TIMEOUT
+        if timeout is not None:
+            cancel_timeout = min(cancel_timeout, max(timeout, 0.0))
+        try:
+            await cancel_task(
+                models.clientpb.BeaconTask(id=task_id), timeout=cancel_timeout
+            )
+        except Exception as err:
+            self._log.debug("could not cancel beacon task %s: %s", task_id, err)
+
+    async def _schedule_resolution(self, task_id: str) -> None:
+        async with self._state_lock:
+            if task_id not in self._pending or task_id in self._resolvers:
+                return
+            resolver = asyncio.create_task(self._resolve(task_id))
+            self._resolvers[task_id] = resolver
+
+    async def _resolve(self, task_id: str) -> None:
+        future: asyncio.Future[ProtobufModel] | None = None
+        try:
+            async with self._state_lock:
+                pending = self._pending.get(task_id)
+            if pending is None:
+                return
+            future, model_type, timeout = pending
+            task_content = await self._stub.GetBeaconTaskContent(
+                models.clientpb.BeaconTask(id=task_id), timeout=timeout
+            )
+            result = _model_from_bytes(model_type, task_content.response)
+            async with self._state_lock:
+                current = self._pending.get(task_id)
+                if current is None or current[0] is not future:
+                    return
+                self._pending.pop(task_id)
+            if not future.done():
+                future.set_result(result)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            async with self._state_lock:
+                pending = self._pending.pop(task_id, None)
+            if future is None and pending is not None:
+                future = pending[0]
+            if future is not None and not future.done():
+                future.set_exception(err)
+            self._log.exception("could not resolve beacon task %s", task_id)
+        finally:
+            async with self._state_lock:
+                current_task = asyncio.current_task()
+                if self._resolvers.get(task_id) is current_task:
+                    self._resolvers.pop(task_id)
+
+    @staticmethod
+    def _put_bounded(
+        queue: asyncio.Queue[models.clientpb.Event | _EventStreamStopped],
+        item: models.clientpb.Event | _EventStreamStopped,
+    ) -> None:
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(item)
+
+    async def _publish(self, event: models.clientpb.Event) -> None:
+        async with self._state_lock:
+            subscribers = list(self._subscribers.values())
+        for queue, filters in subscribers:
+            if filters is None or event.event_type in filters:
+                self._put_bounded(queue, event.model_copy(deep=True))
+
+    async def _stop_subscribers(self, error: Exception | None = None) -> None:
+        async with self._state_lock:
+            subscribers = list(self._subscribers.values())
+            self._subscribers.clear()
+        stopped = _EventStreamStopped(error)
+        for queue, _ in subscribers:
+            while not queue.empty():
+                queue.get_nowait()
+            self._put_bounded(queue, stopped)
+
+    async def _dispatch(self, event: models.clientpb.Event) -> None:
+        await self._publish(event)
+        if event.event_type != self._EVENT_TYPE:
+            return
+        try:
+            beacon_task = _model_from_bytes(models.clientpb.BeaconTask, event.data)
+        except Exception:
+            self._log.exception("could not decode beacon task-result event")
+            return
+        if not beacon_task.id:
+            return
+
+        should_resolve = False
+        async with self._state_lock:
+            if beacon_task.id in self._pending:
+                should_resolve = True
+            else:
+                self._orphaned_results[beacon_task.id] = None
+                self._orphaned_results.move_to_end(beacon_task.id)
+                while len(self._orphaned_results) > self._MAX_ORPHANED_RESULTS:
+                    self._orphaned_results.popitem(last=False)
+        if should_resolve:
+            await self._schedule_resolution(beacon_task.id)
+
+    async def _event_stream(self) -> None:
+        reconnect_delay = self._INITIAL_RECONNECT_DELAY
+        try:
+            while not self._closed:
+                try:
+                    events = self._stub.Events(models.commonpb.Empty())
+                    self._ready.set()
+                    received_event = False
+                    async for event in events:
+                        received_event = True
+                        reconnect_delay = self._INITIAL_RECONNECT_DELAY
+                        await self._dispatch(event)
+                    if self._closed:
+                        return
+                    if received_event:
+                        reconnect_delay = self._INITIAL_RECONNECT_DELAY
+                    raise RuntimeError("client event stream ended unexpectedly")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as err:
+                    self._watcher_error = err
+                    self._ready.set()
+                    self._log.warning(
+                        "client event stream interrupted; reconnecting in %.2fs",
+                        reconnect_delay,
+                    )
+                    await asyncio.sleep(reconnect_delay)
+                    reconnect_delay = min(
+                        reconnect_delay * 2, self._MAX_RECONNECT_DELAY
+                    )
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            self._watcher_error = err
+            self._log.exception("client event broker stopped")
+        finally:
+            self._ready.set()
+            if not self._closed:
+                stopped = RuntimeError("client event broker stopped")
+                async with self._state_lock:
+                    pending = list(self._pending.values())
+                    self._pending.clear()
+                for future, _, _ in pending:
+                    if not future.done():
+                        future.set_exception(stopped)
+                await self._stop_subscribers(stopped)
 
 
 class BaseBeacon:
@@ -56,41 +411,24 @@ class BaseBeacon:
         self._beacon = beacon.model_copy(deep=True)
         self._stub = PydanticSliverRPCStub(channel)
         self.timeout = timeout
-        self._beacon_tasks: dict[
-            str, tuple[asyncio.Future[ProtobufModel], type[ProtobufModel]]
-        ] = {}
-        self._taskresult_ready = asyncio.Event()
-        self._taskresult_error: Exception | None = None
+        self._event_broker = _ClientEventBroker(self._stub)
+        self._owns_event_broker = True
         self._closed = False
-        self._taskresult_watcher = asyncio.get_event_loop().create_task(
-            self._taskresult_events()
-        )
 
     async def close(self) -> None:
-        """Stop watching for beacon task results and cancel pending commands."""
+        """Release resources owned by a directly constructed beacon wrapper."""
 
         if self._closed:
             return
         self._closed = True
-        for task_future, _ in self._beacon_tasks.values():
-            task_future.cancel()
-        self._beacon_tasks.clear()
+        if self._owns_event_broker:
+            await self._event_broker.close()
 
-        if not self._taskresult_watcher.done():
-            self._taskresult_watcher.cancel()
-        with suppress(asyncio.CancelledError, Exception):
-            await self._taskresult_watcher
+    def _attach_event_broker(self, broker: _ClientEventBroker) -> None:
+        """Use the owning client's shared event broker."""
 
-    async def _wait_for_taskresult_watcher(self) -> None:
-        """Wait until the result stream is subscribed before queueing a task."""
-
-        if self._closed:
-            raise RuntimeError("beacon interaction is closed")
-        await self._taskresult_ready.wait()
-        if self._taskresult_watcher.done():
-            raise RuntimeError("beacon task-result watcher is not running") from (
-                self._taskresult_error
-            )
+        self._event_broker = broker
+        self._owns_event_broker = False
 
     @property
     def beacon(self) -> models.clientpb.Beacon:
@@ -203,77 +541,29 @@ class BaseBeacon:
     ) -> _ResultT:
         """Queue a beacon command and await its decoded Pydantic result."""
 
-        await self._wait_for_taskresult_watcher()
+        if self._closed:
+            raise RuntimeError("beacon interaction is closed")
+        await self._event_broker.start()
         if not isinstance(request, ProtobufModel):
             raise TypeError("interactive requests must be Pydantic models")
         task_response = await getattr(self._stub, rpc_name)(
             request, timeout=self.timeout
         )
+        raise_for_command_error(
+            task_response,
+            operation=rpc_name,
+            target_id=self.beacon_id,
+        )
         response = getattr(task_response, "response", None)
         if not isinstance(response, models.commonpb.Response) or not response.task_id:
             raise RuntimeError("beacon command did not return a task ID")
 
-        task_future: asyncio.Future[ProtobufModel] = (
-            asyncio.get_running_loop().create_future()
+        result = await self._event_broker.wait_for_result(
+            response.task_id, result_type, self.timeout
         )
-        self._beacon_tasks[response.task_id] = (task_future, result_type)
-        result = await task_future
-        if not isinstance(result, result_type):
-            raise TypeError(
-                f"{rpc_name} returned {type(result).__name__}, "
-                f"expected {result_type.__name__}"
-            )
-        return result
-
-    async def _taskresult_events(self) -> None:
-        """
-        Monitor task events for results, resolve futures for any results
-        we get back.
-        """
-        try:
-            events = self._stub.Events(models.commonpb.Empty())
-            self._taskresult_ready.set()
-            async for event in events:
-                if event.event_type != "beacon-taskresult":
-                    continue
-                task_id: str | None = None
-                task_future: asyncio.Future[ProtobufModel] | None = None
-                try:
-                    beacon_task = _model_from_bytes(
-                        models.clientpb.BeaconTask, event.data
-                    )
-                    task_id = beacon_task.id
-                    if task_id not in self._beacon_tasks:
-                        continue
-                    task_content = await self._stub.GetBeaconTaskContent(
-                        models.clientpb.BeaconTask(id=task_id)
-                    )
-                    task_future, model_type = self._beacon_tasks[task_id]
-                    result = _model_from_bytes(model_type, task_content.response)
-                    self._beacon_tasks.pop(task_id, None)
-                    if not task_future.done():
-                        task_future.set_result(result)
-                except Exception as err:
-                    if task_id is not None:
-                        pending = self._beacon_tasks.pop(task_id, None)
-                        if task_future is None and pending is not None:
-                            task_future = pending[0]
-                    if task_future is not None and not task_future.done():
-                        task_future.set_exception(err)
-                    self._log.exception(err)
-        except asyncio.CancelledError:
-            raise
-        except Exception as err:
-            self._taskresult_error = err
-            self._log.exception(err)
-        finally:
-            self._taskresult_ready.set()
-            if not self._closed:
-                stopped = RuntimeError("beacon task-result watcher stopped")
-                for task_future, _ in self._beacon_tasks.values():
-                    if not task_future.done():
-                        task_future.set_exception(stopped)
-                self._beacon_tasks.clear()
+        return raise_for_command_error(
+            result, operation=rpc_name, target_id=self.beacon_id
+        )
 
 
 class InteractiveBeacon(BaseBeacon, BaseInteractiveCommands):

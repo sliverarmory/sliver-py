@@ -17,6 +17,7 @@ import grpc
 from google.protobuf.message import Message as _Message
 from grpc.aio._typing import EOFType as _EOFType
 
+from .errors import RPCError
 from .models import ProtobufModel, _model_to_protobuf, _protobuf_to_pydantic
 
 _Metadata = Sequence[tuple[str, str | bytes]]
@@ -61,8 +62,9 @@ class _RawWritableCall(Protocol):
 class _CallBase:
     """Common lifecycle operations exposed by every converted call."""
 
-    def __init__(self, call: object) -> None:
+    def __init__(self, call: object, operation: str = "RPC") -> None:
         self.__call = call
+        self.operation = operation
 
     @property
     def _raw_call(self) -> object:
@@ -99,19 +101,30 @@ class _CallBase:
         return await cast(_RawCommonCall, self.__call).details()
 
     async def wait_for_connection(self) -> None:
-        await cast(_RawCommonCall, self.__call).wait_for_connection()
+        try:
+            await cast(_RawCommonCall, self.__call).wait_for_connection()
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
 
 class UnaryUnaryCall(_CallBase, Generic[_ResponseT]):
     """Awaitable call for one request and one Pydantic response."""
 
-    def __init__(self, call: object, response_type: type[_ResponseT]) -> None:
-        super().__init__(call)
+    def __init__(
+        self,
+        call: object,
+        response_type: type[_ResponseT],
+        operation: str = "RPC",
+    ) -> None:
+        super().__init__(call, operation)
         self.response_type = response_type
 
     def __await__(self) -> Generator[object, None, _ResponseT]:
         async def wait_for_result() -> _ResponseT:
-            response = await cast(Awaitable[object], self._raw_call)
+            try:
+                response = await cast(Awaitable[object], self._raw_call)
+            except grpc.aio.AioRpcError as error:
+                raise _translate_rpc_error(self.operation, error) from error
             return _convert_response(response, self.response_type)
 
         return wait_for_result().__await__()
@@ -120,19 +133,30 @@ class UnaryUnaryCall(_CallBase, Generic[_ResponseT]):
 class UnaryStreamCall(_CallBase, Generic[_ResponseT]):
     """Async iterable/readable call for a server response stream."""
 
-    def __init__(self, call: object, response_type: type[_ResponseT]) -> None:
-        super().__init__(call)
+    def __init__(
+        self,
+        call: object,
+        response_type: type[_ResponseT],
+        operation: str = "RPC",
+    ) -> None:
+        super().__init__(call, operation)
         self.response_type = response_type
 
     def __aiter__(self) -> AsyncIterator[_ResponseT]:
         return self._iterate()
 
     async def _iterate(self) -> AsyncIterator[_ResponseT]:
-        async for response in cast(AsyncIterable[object], self._raw_call):
-            yield _convert_response(response, self.response_type)
+        try:
+            async for response in cast(AsyncIterable[object], self._raw_call):
+                yield _convert_response(response, self.response_type)
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
     async def read(self) -> _ResponseT | _EOFType:
-        response = await cast(_RawReadableCall, self._raw_call).read()
+        try:
+            response = await cast(_RawReadableCall, self._raw_call).read()
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
         if response is grpc.aio.EOF:
             return grpc.aio.EOF
         return _convert_response(response, self.response_type)
@@ -146,14 +170,18 @@ class StreamUnaryCall(_CallBase, Generic[_RequestT, _ResponseT]):
         call: object,
         request_type: type[_RequestT],
         response_type: type[_ResponseT],
+        operation: str = "RPC",
     ) -> None:
-        super().__init__(call)
+        super().__init__(call, operation)
         self.request_type = request_type
         self.response_type = response_type
 
     def __await__(self) -> Generator[object, None, _ResponseT]:
         async def wait_for_result() -> _ResponseT:
-            response = await cast(Awaitable[object], self._raw_call)
+            try:
+                response = await cast(Awaitable[object], self._raw_call)
+            except grpc.aio.AioRpcError as error:
+                raise _translate_rpc_error(self.operation, error) from error
             return _convert_response(response, self.response_type)
 
         return wait_for_result().__await__()
@@ -162,10 +190,16 @@ class StreamUnaryCall(_CallBase, Generic[_RequestT, _ResponseT]):
         """Write one Pydantic request to the client stream."""
 
         protobuf_request = _convert_single_request(request, self.request_type)
-        await cast(_RawWritableCall, self._raw_call).write(protobuf_request)
+        try:
+            await cast(_RawWritableCall, self._raw_call).write(protobuf_request)
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
     async def done_writing(self) -> None:
-        await cast(_RawWritableCall, self._raw_call).done_writing()
+        try:
+            await cast(_RawWritableCall, self._raw_call).done_writing()
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
 
 class StreamStreamCall(_CallBase, Generic[_RequestT, _ResponseT]):
@@ -176,8 +210,9 @@ class StreamStreamCall(_CallBase, Generic[_RequestT, _ResponseT]):
         call: object,
         request_type: type[_RequestT],
         response_type: type[_ResponseT],
+        operation: str = "RPC",
     ) -> None:
-        super().__init__(call)
+        super().__init__(call, operation)
         self.request_type = request_type
         self.response_type = response_type
 
@@ -185,11 +220,17 @@ class StreamStreamCall(_CallBase, Generic[_RequestT, _ResponseT]):
         return self._iterate()
 
     async def _iterate(self) -> AsyncIterator[_ResponseT]:
-        async for response in cast(AsyncIterable[object], self._raw_call):
-            yield _convert_response(response, self.response_type)
+        try:
+            async for response in cast(AsyncIterable[object], self._raw_call):
+                yield _convert_response(response, self.response_type)
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
     async def read(self) -> _ResponseT | _EOFType:
-        response = await cast(_RawReadableCall, self._raw_call).read()
+        try:
+            response = await cast(_RawReadableCall, self._raw_call).read()
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
         if response is grpc.aio.EOF:
             return grpc.aio.EOF
         return _convert_response(response, self.response_type)
@@ -198,10 +239,16 @@ class StreamStreamCall(_CallBase, Generic[_RequestT, _ResponseT]):
         """Write one Pydantic request to the client stream."""
 
         protobuf_request = _convert_single_request(request, self.request_type)
-        await cast(_RawWritableCall, self._raw_call).write(protobuf_request)
+        try:
+            await cast(_RawWritableCall, self._raw_call).write(protobuf_request)
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
     async def done_writing(self) -> None:
-        await cast(_RawWritableCall, self._raw_call).done_writing()
+        try:
+            await cast(_RawWritableCall, self._raw_call).done_writing()
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
 
 class _MultiCallableBase(Generic[_RequestT, _ResponseT]):
@@ -210,10 +257,12 @@ class _MultiCallableBase(Generic[_RequestT, _ResponseT]):
         call: Callable[..., object],
         request_type: type[_RequestT],
         response_type: type[_ResponseT],
+        operation: str = "RPC",
     ) -> None:
         self.__call = call
         self.request_type = request_type
         self.response_type = response_type
+        self.operation = operation
 
     def _invoke(
         self,
@@ -225,14 +274,17 @@ class _MultiCallableBase(Generic[_RequestT, _ResponseT]):
         wait_for_ready: bool | None,
         compression: grpc.Compression | None,
     ) -> object:
-        return self.__call(
-            request,
-            timeout=timeout,
-            metadata=metadata,
-            credentials=credentials,
-            wait_for_ready=wait_for_ready,
-            compression=compression,
-        )
+        try:
+            return self.__call(
+                request,
+                timeout=timeout,
+                metadata=metadata,
+                credentials=credentials,
+                wait_for_ready=wait_for_ready,
+                compression=compression,
+            )
+        except grpc.aio.AioRpcError as error:
+            raise _translate_rpc_error(self.operation, error) from error
 
 
 class UnaryUnaryMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
@@ -256,7 +308,7 @@ class UnaryUnaryMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
             wait_for_ready=wait_for_ready,
             compression=compression,
         )
-        return UnaryUnaryCall(call, self.response_type)
+        return UnaryUnaryCall(call, self.response_type, self.operation)
 
 
 class UnaryStreamMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
@@ -280,7 +332,7 @@ class UnaryStreamMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
             wait_for_ready=wait_for_ready,
             compression=compression,
         )
-        return UnaryStreamCall(call, self.response_type)
+        return UnaryStreamCall(call, self.response_type, self.operation)
 
 
 class StreamUnaryMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
@@ -304,7 +356,9 @@ class StreamUnaryMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
             wait_for_ready=wait_for_ready,
             compression=compression,
         )
-        return StreamUnaryCall(call, self.request_type, self.response_type)
+        return StreamUnaryCall(
+            call, self.request_type, self.response_type, self.operation
+        )
 
 
 class StreamStreamMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
@@ -328,7 +382,18 @@ class StreamStreamMultiCallable(_MultiCallableBase[_RequestT, _ResponseT]):
             wait_for_ready=wait_for_ready,
             compression=compression,
         )
-        return StreamStreamCall(call, self.request_type, self.response_type)
+        return StreamStreamCall(
+            call, self.request_type, self.response_type, self.operation
+        )
+
+
+def _translate_rpc_error(operation: str, error: grpc.aio.AioRpcError) -> RPCError:
+    """Convert gRPC transport failures into the public error taxonomy."""
+
+    status = error.code()
+    status_name = status.name if isinstance(status, grpc.StatusCode) else str(status)
+    details = error.details() or str(error)
+    return RPCError(operation, details, status=status_name)
 
 
 def _convert_request_stream(

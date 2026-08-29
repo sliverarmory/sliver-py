@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from . import models
+from .enums import GOOS, LogonType, RegistryHive
 
 class BaseInteractiveCommands:
     async def ping(self) -> models.sliverpb.Ping:
@@ -41,13 +42,22 @@ class BaseInteractiveCommands:
     async def upload(self, remote_path: str, data: bytes, is_ioc: bool=False) -> models.sliverpb.Upload:
         ...
 
+    async def procdump(self, pid: int) -> models.sliverpb.ProcessDump:
+        ...
+
     async def process_dump(self, pid: int) -> models.sliverpb.ProcessDump:
+        ...
+
+    async def runas(self, username: str, process_name: str, args: str='', *, domain: str='', password: str='', show_window: bool=False, net_only: bool=False) -> models.sliverpb.RunAs:
         ...
 
     async def run_as(self, username: str, process_name: str, args: str) -> models.sliverpb.RunAs:
         ...
 
     async def impersonate(self, username: str) -> models.sliverpb.Impersonate:
+        ...
+
+    async def rev2self(self) -> models.sliverpb.RevToSelf:
         ...
 
     async def revert_to_self(self) -> models.sliverpb.RevToSelf:
@@ -60,6 +70,9 @@ class BaseInteractiveCommands:
         ...
 
     async def msf(self, payload: str, lhost: str, lport: int, encoder: str, iterations: int) -> models.sliverpb.Task:
+        ...
+
+    async def msf_inject(self, payload: str, lhost: str, lport: int, encoder: str, iterations: int, pid: int) -> models.sliverpb.Task:
         ...
 
     async def msf_remote(self, payload: str, lhost: str, lport: int, encoder: str, iterations: int, pid: int) -> models.sliverpb.Task:
@@ -77,13 +90,16 @@ class BaseInteractiveCommands:
     async def sideload(self, data: bytes, process_name: str, arguments: list[str], entry_point: str, kill: bool) -> models.sliverpb.Sideload:
         ...
 
+    async def spawndll(self, data: bytes, *, process_name: str='c:\\windows\\system32\\notepad.exe', arguments: list[str] | None=None, entry_point: str='ReflectiveLoader', keep_alive: bool=False, parent_pid: int=0, process_arguments: list[str] | None=None) -> models.sliverpb.SpawnDll:
+        ...
+
     async def spawn_dll(self, data: bytes, process_name: str, arguments: list[str], entry_point: str, kill: bool) -> models.sliverpb.SpawnDll:
         ...
 
     async def list_extensions(self) -> models.sliverpb.ListExtensions:
         ...
 
-    async def register_extension(self, name: str, data: bytes, goos: str, init: str) -> models.sliverpb.RegisterExtension:
+    async def register_extension(self, name: str, data: bytes, goos: GOOS | str, init: str) -> models.sliverpb.RegisterExtension:
         ...
 
     async def call_extension(self, name: str, export: str, ext_args: bytes) -> models.sliverpb.CallExtension:
@@ -92,7 +108,10 @@ class BaseInteractiveCommands:
     async def screenshot(self) -> models.sliverpb.Screenshot:
         ...
 
-    async def make_token(self, username: str, password: str, domain: str) -> models.sliverpb.MakeToken:
+    async def make_token(self, username: str, password: str, domain: str='.', *, logon_type: LogonType=LogonType.NEW_CREDENTIALS) -> models.sliverpb.MakeToken:
+        ...
+
+    async def env(self, name: str='') -> models.sliverpb.EnvInfo:
         ...
 
     async def get_env(self, name: str) -> models.sliverpb.EnvInfo:
@@ -101,14 +120,23 @@ class BaseInteractiveCommands:
     async def set_env(self, key: str, value: str) -> models.sliverpb.SetEnv:
         ...
 
+    async def env_set(self, key: str, value: str) -> models.sliverpb.SetEnv:
+        ...
+
     async def unset_env(self, key: str) -> models.sliverpb.UnsetEnv:
         ...
 
-    async def registry_read(self, hive: str, reg_path: str, key: str, hostname: str) -> models.sliverpb.RegistryRead:
+    async def env_unset(self, key: str) -> models.sliverpb.UnsetEnv:
         ...
 
-    async def registry_write(self, hive: str, reg_path: str, key: str, hostname: str, string_value: str, byte_value: bytes, dword_value: int, qword_value: int, reg_type: models.sliverpb.RegistryType) -> models.sliverpb.RegistryWrite:
+    async def registry_read(self, hive: RegistryHive | str, reg_path: str, key: str, hostname: str) -> models.sliverpb.RegistryRead:
         ...
 
-    async def registry_create_key(self, hive: str, reg_path: str, key: str, hostname: str) -> models.sliverpb.RegistryCreateKey:
+    async def registry_write(self, hive: RegistryHive | str, reg_path: str, key: str, hostname: str, string_value: str, byte_value: bytes, dword_value: int, qword_value: int, reg_type: models.sliverpb.RegistryType) -> models.sliverpb.RegistryWrite:
+        ...
+
+    async def registry_create(self, path: str, *, hive: RegistryHive | str=RegistryHive.CURRENT_USER, hostname: str='') -> models.sliverpb.RegistryCreateKey:
+        ...
+
+    async def registry_create_key(self, hive: RegistryHive | str, reg_path: str, key: str, hostname: str) -> models.sliverpb.RegistryCreateKey:
         ...
